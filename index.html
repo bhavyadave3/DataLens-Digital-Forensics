@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090a0d">
+  <meta name="description" content="DataLens local digital forensics workspace">
+  <title>DataLens | Digital Forensics</title>
+  <link rel="stylesheet" href="/static/static.css">
+  <style>
+    /* Keep the workflow title and description on separate readable lines. */
+    .workflow-link { text-align: left; cursor: pointer; width: 100%; }
+    .workflow-link > span:nth-child(2) { display: block; flex: 1 1 auto; min-width: 0; }
+    .workflow-link > span:nth-child(2) strong,
+    .workflow-link > span:nth-child(2) small { display: block; line-height: 1.45; }
+    .workflow-link > span:nth-child(2) small { margin-top: 4px; color: var(--muted); white-space: normal; }
+    .workflow-link:focus-visible { outline: 2px solid #d5d7dc; outline-offset: 3px; }
+  </style>
+  <script src="/javascript.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#dashboard" data-page="dashboard" aria-label="DataLens dashboard">
+        <span class="brand-mark" aria-hidden="true">DL</span>
+        <span class="brand-copy"><strong>DataLens</strong><small>Digital forensics</small></span>
+      </a>
+
+      <div class="sidebar-label">WORKSPACE</div>
+      <nav class="primary-nav" aria-label="Main navigation">
+        <button class="nav-item active" type="button" data-page="dashboard"><span class="nav-icon">▦</span><span>Dashboard</span></button>
+        <button class="nav-item" type="button" data-page="cases"><span class="nav-icon">▣</span><span>Cases</span></button>
+        <button class="nav-item" type="button" data-page="acquire"><span class="nav-icon">⇧</span><span>Acquire evidence</span></button>
+        <button class="nav-item" type="button" data-page="analysis"><span class="nav-icon">⌁</span><span>AI analysis</span></button>
+        <button class="nav-item" type="button" data-page="custody"><span class="nav-icon">⛓</span><span>Chain of custody</span></button>
+        <button class="nav-item" type="button" data-page="recovery"><span class="nav-icon">⌕</span><span>File recovery</span><span class="nav-tag">Prototype</span></button>
+        <button class="nav-item" type="button" data-page="system"><span class="nav-icon">⚙</span><span>System checks</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-status"><span class="status-dot" aria-hidden="true"></span><span><strong>Local workspace</strong><small>Data stays on this machine</small></span></div>
+        <div class="sidebar-footnote">Research prototype · Verify findings independently</div>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button mobile-menu" id="mobile-menu-button" type="button" aria-label="Toggle navigation" aria-controls="sidebar" aria-expanded="false"><span aria-hidden="true">☰</span></button>
+          <div><div class="breadcrumb">DataLens <span aria-hidden="true">/</span> <span id="breadcrumb-current">Dashboard</span></div><div class="topbar-subtitle">Digital evidence workspace</div></div>
+        </div>
+        <div class="topbar-right">
+          <div class="connection-state" role="status" aria-live="polite" aria-atomic="true"><span class="status-dot" id="connection-dot" aria-hidden="true"></span><span id="connection-label">Connecting to local service…</span></div>
+          <button class="icon-button" id="refresh-current-page" type="button" title="Refresh current page" aria-label="Refresh current page">↻</button>
+        </div>
+      </header>
+
+      <section class="content-area">
+        <div class="global-message" id="global-message" role="status" aria-live="polite" hidden></div>
+
+        <!-- DASHBOARD -->
+        <section class="page active" id="page-dashboard" data-page-panel="dashboard" aria-labelledby="dashboard-title">
+          <div class="page-heading page-heading-dashboard">
+            <div class="dashboard-heading-copy">
+              <div class="eyebrow">OVERVIEW</div>
+              <h1 id="dashboard-title">Investigation dashboard</h1>
+              <p class="page-description">A clear overview of your cases, evidence and analysis activity.</p>
+            </div>
+            <div class="heading-actions dashboard-heading-actions" aria-label="Dashboard actions">
+              <span class="date-chip" id="dashboard-updated">Awaiting workspace data</span>
+              <button class="button button-primary new-case-button" type="button" data-go-page="cases"><span class="button-icon" aria-hidden="true">＋</span><span>New case</span></button>
+            </div>
+          </div>
+          <div class="metric-grid" id="dashboard-metrics">
+            <article class="metric-card"><div class="metric-top"><span class="metric-label">ACTIVE CASES</span><span class="metric-symbol">▣</span></div><div class="metric-value" id="metric-cases">—</div><div class="metric-note">Cases in this workspace</div></article>
+            <article class="metric-card"><div class="metric-top"><span class="metric-label">EVIDENCE ITEMS</span><span class="metric-symbol">▤</span></div><div class="metric-value" id="metric-evidence">—</div><div class="metric-note">Registered evidence files</div></article>
+            <article class="metric-card"><div class="metric-top"><span class="metric-label">SAVED ANALYSES</span><span class="metric-symbol">⌁</span></div><div class="metric-value" id="metric-analyses">—</div><div class="metric-note">Persisted analysis records</div></article>
+            <article class="metric-card"><div class="metric-top"><span class="metric-label">VAULT STORAGE</span><span class="metric-symbol">▥</span></div><div class="metric-value" id="metric-vault">—</div><div class="metric-note" id="metric-vault-note">Configured capacity</div><div class="progress-track"><span id="vault-progress" style="width:0%"></span></div></article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="panel panel-large">
+              <div class="panel-heading"><div><h2>Recent cases</h2><p>Latest investigations in your workspace</p></div><button class="text-button" type="button" data-go-page="cases">View cases <span aria-hidden="true">→</span></button></div>
+              <div class="table-scroll"><table class="data-table"><thead><tr><th>Case name</th><th>Case ID</th><th>Created</th><th>Status</th></tr></thead><tbody id="dashboard-recent-cases"><tr><td colspan="4" class="empty-cell">Loading cases…</td></tr></tbody></table></div>
+            </section>
+            <section class="panel quick-panel">
+              <div class="panel-heading"><div><h2>Quick workflow</h2><p>Common investigation tasks</p></div></div>
+              <button class="workflow-link" type="button" data-go-page="cases"><span class="workflow-number">01</span><span><strong>Create a case</strong><small>Define the investigation and investigator</small></span><span class="workflow-arrow">→</span></button>
+              <button class="workflow-link" type="button" data-go-page="acquire"><span class="workflow-number">02</span><span><strong>Acquire evidence</strong><small>Register files and calculate hashes</small></span><span class="workflow-arrow">→</span></button>
+              <button class="workflow-link" type="button" data-go-page="analysis"><span class="workflow-number">03</span><span><strong>Analyze evidence</strong><small>Review triage findings</small></span><span class="workflow-arrow">→</span></button>
+              <button class="workflow-link" type="button" data-go-page="custody"><span class="workflow-number">04</span><span><strong>Review custody</strong><small>Verify integrity and export reports</small></span><span class="workflow-arrow">→</span></button>
+            </section>
+          </div>
+          <section class="panel">
+            <div class="panel-heading"><div><h2>Recent evidence</h2><p>Recently registered files across cases</p></div><button class="text-button" type="button" data-go-page="custody">Review integrity <span aria-hidden="true">→</span></button></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>File</th><th>Evidence ID</th><th>SHA-256</th><th>Acquired</th></tr></thead><tbody id="dashboard-recent-evidence"><tr><td colspan="4" class="empty-cell">Loading evidence…</td></tr></tbody></table></div>
+          </section>
+          <div class="notice notice-neutral"><span class="notice-icon">i</span><div><strong>Forensic scope</strong><p>DataLens currently supports file-level acquisition from mounted storage. It does not provide hardware write-blocking or a bit-for-bit forensic disk image. AI outputs are triage aids and require independent validation.</p></div></div>
+        </section>
+
+        <!-- CASES -->
+        <section class="page" id="page-cases" data-page-panel="cases" aria-labelledby="cases-title" hidden>
+          <div class="page-heading"><div><div class="eyebrow">CASE MANAGEMENT</div><h1 id="cases-title">Cases</h1><p class="page-description">Create investigations and review your case register.</p></div></div>
+          <div class="two-column-layout">
+            <section class="panel form-panel"><div class="panel-heading"><div><h2>Create a case</h2><p>Enter the investigation details below.</p></div></div>
+              <form id="create-case-form">
+                <label class="field-label" for="investigator-name">Investigator / participant</label><input class="form-control" id="investigator-name" name="actor" type="text" value="Investigator" maxlength="120" autocomplete="name" required>
+                <p class="field-help">Activity will be recorded under this name. This prototype does not provide account authentication.</p>
+                <label class="field-label" for="case-name">Case name</label><input class="form-control" id="case-name" name="case_name" type="text" placeholder="e.g. USB incident review" maxlength="200" required>
+                <label class="field-label" for="case-description">Case description</label><textarea class="form-control" id="case-description" name="description" rows="4" placeholder="Purpose, scope and notes…"></textarea>
+                <button class="button button-primary button-full" type="submit">＋ Create case</button>
+              </form>
+              <div class="inline-message" id="create-case-message" role="status" aria-live="polite" hidden></div>
+            </section>
+            <section class="panel case-selection-panel"><div class="panel-heading"><div><h2>Current selection</h2><p>Choose a case to use across workflows.</p></div></div>
+              <label class="field-label" for="selected-case">Selected case</label><select class="form-control" id="selected-case"><option value="">Loading cases…</option></select>
+              <div class="selected-case-summary" id="selected-case-summary"><div class="summary-placeholder">Select a case to see its details.</div></div>
+              <button class="button button-secondary button-full" type="button" id="refresh-cases">↻ Refresh case register</button>
+            </section>
+          </div>
+          <section class="panel"><div class="panel-heading"><div><h2>Case register</h2><p id="case-register-count">All recorded cases</p></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Case name</th><th>Case ID</th><th>Status</th><th>Created</th><th>Description</th></tr></thead><tbody id="cases-table-body"><tr><td colspan="5" class="empty-cell">Loading cases…</td></tr></tbody></table></div></section>
+        </section>
+
+        <!-- ACQUISITION -->
+        <section class="page" id="page-acquire" data-page-panel="acquire" aria-labelledby="acquire-title" hidden>
+          <div class="page-heading"><div><div class="eyebrow">EVIDENCE HANDLING</div><h1 id="acquire-title">Acquire evidence</h1><p class="page-description">Register files to a case and preserve their recorded integrity.</p></div></div>
+          <div class="notice notice-neutral"><span class="notice-icon">i</span><div><strong>Before acquiring</strong><p>Device discovery only lists devices exposed by the operating system. This workflow copies files from a mounted volume; it is not bit-for-bit disk imaging and does not provide hardware write-blocking. Use only data you are authorized to examine.</p></div></div>
+          <section class="panel case-toolbar"><div class="toolbar-field"><label class="field-label" for="acquire-case">Case</label><select class="form-control case-select" id="acquire-case"><option value="">Choose a case…</option></select></div><div class="toolbar-field"><label class="field-label" for="acquire-investigator">Investigator</label><input class="form-control" id="acquire-investigator" type="text" value="Investigator" maxlength="120"></div></section>
+          <div class="two-column-layout">
+            <section class="panel"><div class="panel-heading"><div><h2>Connected storage</h2><p>Detect mounted removable volumes</p></div><button class="button button-secondary" type="button" id="detect-devices">↻ Detect devices</button></div><div id="device-list" class="device-list"><div class="empty-state"><span class="empty-state-icon">▤</span><strong>Devices not checked</strong><p>Select Detect devices to inspect available mounted volumes.</p></div></div>
+              <div class="device-acquire-controls" id="device-acquire-controls" hidden><label class="check-row"><input id="device-authorized" type="checkbox"><span>I am authorized to acquire files from this volume.</span></label><button class="button button-primary button-full" id="acquire-device" type="button" disabled>Acquire files from selected volume</button></div><div class="inline-message" id="device-message" role="status" aria-live="polite" hidden></div>
+            </section>
+            <section class="panel"><div class="panel-heading"><div><h2>Acquire individual files</h2><p>Choose one or more files from this computer.</p></div></div><form id="upload-evidence-form"><label class="file-drop" for="evidence-files"><span class="file-drop-icon">＋</span><strong>Select evidence files</strong><span>Files are copied into the selected case vault and hashed.</span><input id="evidence-files" type="file" multiple></label><div id="selected-upload-list" class="selected-upload-list"></div><button class="button button-primary button-full" type="submit" id="upload-evidence-button" disabled>Acquire selected files</button></form><div class="inline-message" id="upload-message" role="status" aria-live="polite" hidden></div></section>
+          </div>
+          <section class="panel"><div class="panel-heading"><div><h2>Registered evidence</h2><p>Evidence currently associated with the selected case</p></div><button class="button button-secondary" type="button" id="refresh-acquired-evidence">↻ Refresh</button></div><div class="table-scroll"><table class="data-table"><thead><tr><th>File</th><th>Evidence ID</th><th>Size</th><th>SHA-256</th><th>Acquired</th></tr></thead><tbody id="acquired-evidence-body"><tr><td colspan="5" class="empty-cell">Select a case to view its evidence.</td></tr></tbody></table></div></section>
+        </section>
+
+        <!-- AI ANALYSIS -->
+        <section class="page" id="page-analysis" data-page-panel="analysis" aria-labelledby="analysis-title" hidden>
+          <div class="page-heading"><div><div class="eyebrow">TRIAGE WORKSPACE</div><h1 id="analysis-title">AI analysis</h1><p class="page-description">Run and review experimental evidence-triage results.</p></div></div>
+          <div class="notice notice-neutral"><span class="notice-icon">i</span><div><strong>Interpret results carefully</strong><p>AI outputs are experimental triage aids, not proof of malicious activity. Demonstration model predictions may use heuristic labels and are not independently validated.</p></div></div>
+          <section class="panel case-toolbar"><div class="toolbar-field"><label class="field-label" for="analysis-case">Case</label><select class="form-control case-select" id="analysis-case"><option value="">Choose a case…</option></select></div><div class="toolbar-actions"><button class="button button-primary" type="button" id="run-analysis">Run analysis on case</button><button class="button button-secondary" type="button" id="refresh-analysis">Refresh results</button></div></section>
+          <div class="mini-metric-grid"><article class="mini-metric"><span>Evidence items</span><strong id="analysis-evidence-count">—</strong></article><article class="mini-metric"><span>Saved analyses</span><strong id="analysis-saved-count">—</strong></article><article class="mini-metric"><span>Latest findings</span><strong id="analysis-result-count">—</strong></article></div>
+          <section class="panel"><div class="panel-heading"><div><h2>Latest analysis results</h2><p>Most recent saved analysis per evidence item</p></div><div class="toolbar-actions"><button class="button button-secondary" type="button" id="export-analysis-csv">Export CSV</button><button class="button button-secondary" type="button" id="export-analysis-json">Export JSON</button></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>File / Evidence ID</th><th>Rule severity</th><th>Risk score</th><th>Random Forest</th><th>Confidence</th><th>Anomaly result</th><th>Analyzed</th></tr></thead><tbody id="analysis-results-body"><tr><td colspan="7" class="empty-cell">Select a case to load saved analysis results.</td></tr></tbody></table></div><div class="analysis-detail" id="analysis-detail" hidden><h3>Selected finding details</h3><pre id="analysis-detail-json"></pre></div></section>
+          <div class="inline-message" id="analysis-message" role="status" aria-live="polite" hidden></div>
+        </section>
+
+        <!-- CHAIN OF CUSTODY -->
+        <section class="page" id="page-custody" data-page-panel="custody" aria-labelledby="custody-title" hidden>
+          <div class="page-heading"><div><div class="eyebrow">INTEGRITY & DOCUMENTATION</div><h1 id="custody-title">Chain of custody</h1><p class="page-description">Review evidence integrity, custody events, and case reports.</p></div></div>
+          <section class="panel case-toolbar"><div class="toolbar-field"><label class="field-label" for="custody-case">Case</label><select class="form-control case-select" id="custody-case"><option value="">Choose a case…</option></select></div><div class="toolbar-field"><label class="field-label" for="custody-investigator">Investigator</label><input class="form-control" id="custody-investigator" type="text" value="Investigator" maxlength="120"></div><div class="toolbar-actions"><button class="button button-secondary" type="button" id="refresh-custody">↻ Refresh</button></div></section>
+          <div class="mini-metric-grid"><article class="mini-metric"><span>Evidence items</span><strong id="custody-evidence-count">—</strong></article><article class="mini-metric"><span>Custody events</span><strong id="custody-events-count">—</strong></article><article class="mini-metric"><span>Hash-chain status</span><strong id="custody-chain-status">—</strong></article></div>
+          <div class="two-column-layout">
+            <section class="panel"><div class="panel-heading"><div><h2>Verify evidence integrity</h2><p>Compare stored content with its recorded SHA-256 hash.</p></div></div><label class="field-label" for="verify-evidence">Evidence item</label><select class="form-control" id="verify-evidence"><option value="">Select evidence…</option></select><button class="button button-primary button-full" type="button" id="verify-evidence-button">Verify SHA-256</button><div class="inline-message" id="verify-message" role="status" aria-live="polite" hidden></div></section>
+            <section class="panel"><div class="panel-heading"><div><h2>Generate reports</h2><p>Export case or individual evidence custody records.</p></div></div><button class="button button-primary button-full" type="button" id="generate-case-report">Generate case custody PDF</button><div class="field-spacer"></div><label class="field-label" for="report-evidence">Individual evidence</label><select class="form-control" id="report-evidence"><option value="">Select evidence…</option></select><button class="button button-secondary button-full" type="button" id="generate-evidence-report">Generate evidence custody PDF</button><div class="inline-message" id="report-message" role="status" aria-live="polite" hidden></div></section>
+          </div>
+          <section class="panel"><div class="panel-heading"><div><h2>Evidence inventory</h2><p>Files associated with the selected case</p></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>File</th><th>Evidence ID</th><th>SHA-256</th><th>Acquired</th><th>Status</th></tr></thead><tbody id="custody-evidence-body"><tr><td colspan="5" class="empty-cell">Select a case to view evidence.</td></tr></tbody></table></div></section>
+          <section class="panel"><div class="panel-heading"><div><h2>Chronological custody events</h2><p>Recorded handling activity for this case</p></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Evidence ID</th><th>Details</th></tr></thead><tbody id="custody-events-body"><tr><td colspan="5" class="empty-cell">Select a case to view custody history.</td></tr></tbody></table></div></section>
+        </section>
+
+        <!-- RECOVERY -->
+        <section class="page" id="page-recovery" data-page-panel="recovery" aria-labelledby="recovery-title" hidden>
+          <div class="page-heading"><div><div class="eyebrow">OPTIONAL WORKFLOW</div><h1 id="recovery-title">File recovery</h1><p class="page-description">Experimental signature-based carving from an authorized image file.</p></div></div>
+          <div class="notice notice-neutral"><span class="notice-icon">i</span><div><strong>Prototype limitations</strong><p>Carving supports JPEG, PNG, PDF and ZIP signatures. Results can be incomplete or false positives; fragmented files and original filesystem metadata are not reconstructed. You can leave this feature unused for now.</p></div></div>
+          <section class="panel"><div class="form-grid form-grid-three"><div><label class="field-label" for="recovery-case">Case</label><select class="form-control case-select" id="recovery-case"><option value="">Choose a case…</option></select></div><div><label class="field-label" for="recovery-investigator">Investigator</label><input class="form-control" id="recovery-investigator" type="text" value="Investigator" maxlength="120"></div><div><label class="field-label" for="recovery-file-types">File signatures</label><select class="form-control" id="recovery-file-types" multiple size="4"><option selected value="JPEG">JPEG</option><option selected value="PNG">PNG</option><option selected value="PDF">PDF</option><option selected value="ZIP">ZIP</option></select></div></div><label class="field-label" for="recovery-image">Raw / forensic image file</label><input class="form-control file-input" id="recovery-image" type="file"><div class="form-grid form-grid-two"><div><label class="field-label" for="recovery-max-candidates">Maximum candidates</label><input class="form-control" id="recovery-max-candidates" type="number" min="1" max="500" value="100"></div><div><label class="field-label" for="recovery-max-size">Maximum candidate size (MB)</label><input class="form-control" id="recovery-max-size" type="number" min="1" max="100" value="25"></div></div><button class="button button-primary" type="button" id="scan-recovery">Scan image for signatures</button><div class="inline-message" id="recovery-message" role="status" aria-live="polite" hidden></div></section>
+          <section class="panel"><div class="panel-heading"><div><h2>Carved candidates</h2><p>Review candidates before registering them as evidence.</p></div><button class="button button-secondary" type="button" id="register-recovery" disabled>Register candidates</button></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Candidate</th><th>Type</th><th>Offset</th><th>Size</th><th>Status</th></tr></thead><tbody id="recovery-candidates-body"><tr><td colspan="5" class="empty-cell">No recovery scan has been run.</td></tr></tbody></table></div></section>
+        </section>
+
+        <!-- SYSTEM CHECKS -->
+        <section class="page" id="page-system" data-page-panel="system" aria-labelledby="system-title" hidden>
+          <div class="page-heading"><div><div class="eyebrow">ENVIRONMENT</div><h1 id="system-title">System checks</h1><p class="page-description">Review runtime dependencies, device discovery, and local workspace backup options.</p></div><button class="button button-primary" type="button" id="run-system-checks">Run system checks</button></div>
+          <section class="panel"><div class="panel-heading"><div><h2>Environment diagnostics</h2><p>Information reported by the current Python environment</p></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody id="system-checks-body"><tr><td colspan="2" class="empty-cell">Select Run system checks to inspect the environment.</td></tr></tbody></table></div></section>
+          <section class="panel"><div class="panel-heading"><div><h2>Connected devices</h2><p>Read-only device discovery; not a hardware write-blocker check.</p></div><button class="button button-secondary" type="button" id="inspect-devices">↻ Refresh devices</button></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Name / model</th><th>Mount point</th><th>Filesystem</th><th>Capacity</th><th>Removable</th></tr></thead><tbody id="system-devices-body"><tr><td colspan="5" class="empty-cell">Select Refresh devices to inspect connected volumes.</td></tr></tbody></table></div></section>
+          <section class="panel backup-panel"><div class="panel-heading"><div><h2>Local backup</h2><p>Preserve the database and DataLens data directory.</p></div><span class="neutral-badge">Not encrypted</span></div><p class="body-copy">The backup contains a database snapshot and files under the DataLens data directory. Large backups may require substantial disk space. Keep a separate copy in a secure location.</p><button class="button button-primary" type="button" id="create-backup" disabled title="Backup endpoint is not exposed by the current API server">Create backup</button><p class="field-help">The current local API does not expose a backup endpoint; use your existing backup process until one is added deliberately.</p><div class="inline-message" id="backup-message" role="status" aria-live="polite" hidden></div></section>
+        </section>
+
+        <footer class="app-footer"><span>DataLens · Local digital forensics workspace</span><span>Research prototype · Validate findings independently</span></footer>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
