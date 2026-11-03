@@ -1,3 +1,4 @@
+
 /* DataLens frontend controller
    Handles UI and local API requests only.
    Forensic operations remain in the Python modules.
@@ -1084,6 +1085,204 @@
   // ANALYSIS
   // ------------------------------------------------------------
 
+  function parseAnalysisObject(value) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? parsed
+          : {};
+      } catch (error) {
+        console.warn('DataLens: could not parse saved analysis JSON.', error);
+      }
+    }
+
+    return {};
+  }
+
+  function firstAnalysisValue(...values) {
+    for (const candidate of values) {
+      if (
+        candidate !== undefined &&
+        candidate !== null &&
+        candidate !== ''
+      ) {
+        return candidate;
+      }
+    }
+
+    return 'Not available';
+  }
+
+  function analysisConfidence(value) {
+    if (
+      value === undefined ||
+      value === null ||
+      value === '' ||
+      value === 'Not available' ||
+      value === '—'
+    ) {
+      return 'N/A';
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      // Experimental vote fraction, not a calibrated malware probability.
+      return value >= 0 && value <= 1
+        ? `${(value * 100).toFixed(1)}%`
+        : `${value}`;
+    }
+
+    return String(value);
+  }
+
+  function normalizeAnalysisRecord(result, evidenceById = new Map()) {
+    const record = parseAnalysisObject(result);
+
+    const findings = parseAnalysisObject(
+      record.findings ??
+      record.findings_json ??
+      record.findingsJson ??
+      record.analysis_findings
+    );
+
+    // Support older records that wrap the findings one level deeper.
+    const effectiveFindings =
+      Object.keys(findings).length === 1 &&
+      findings.findings &&
+      typeof findings.findings === 'object'
+        ? parseAnalysisObject(findings.findings)
+        : findings;
+
+    const models = parseAnalysisObject(
+      effectiveFindings.ai_models ??
+      record.ai_models ??
+      record.models
+    );
+
+    const randomForest = parseAnalysisObject(
+      models.random_forest ??
+      models.randomForest ??
+      effectiveFindings.random_forest
+    );
+
+    const isolationForest = parseAnalysisObject(
+      models.isolation_forest ??
+      models.isolationForest ??
+      effectiveFindings.isolation_forest
+    );
+
+    const evidenceId = firstAnalysisValue(
+      record.evidence_id,
+      record['Evidence ID'],
+      record.evidenceId,
+      record.id
+    );
+
+    const evidenceRecord =
+      evidenceById.get(evidenceId) ||
+      evidenceById.get(String(evidenceId)) ||
+      {};
+
+    const fileName = firstAnalysisValue(
+      evidenceRecord.file_name,
+      evidenceRecord.filename,
+      evidenceRecord.original_name,
+      evidenceRecord.relative_name,
+      record.file_name,
+      record.filename,
+      record.file,
+      record.File,
+      record['File name']
+    );
+
+    const severity = firstAnalysisValue(
+      effectiveFindings.severity,
+      effectiveFindings.risk_level,
+      effectiveFindings.rule_severity,
+      record['Rule severity'],
+      record.rule_severity,
+      record.severity,
+      record.risk_level
+    );
+
+    const riskScore = firstAnalysisValue(
+      effectiveFindings.risk_score,
+      effectiveFindings.rule_risk_score,
+      record['Rule risk score'],
+      record['Risk score'],
+      record.risk_score
+    );
+
+    const prediction = firstAnalysisValue(
+      randomForest.prediction,
+      effectiveFindings.random_forest_prediction,
+      effectiveFindings.prediction,
+      record['Random Forest'],
+      record.random_forest_prediction,
+      record.prediction,
+      record.ml_prediction
+    );
+
+    const confidence = analysisConfidence(firstAnalysisValue(
+      randomForest.confidence,
+      effectiveFindings.confidence,
+      record['RF confidence'],
+      record.confidence,
+      record.model_confidence
+    ));
+
+    const anomaly = firstAnalysisValue(
+      isolationForest.result,
+      effectiveFindings.anomaly_result,
+      effectiveFindings.anomaly,
+      record['Isolation Forest'],
+      record.anomaly_result,
+      record.anomaly,
+      record.anomaly_detected
+    );
+
+    const anomalyScore = firstAnalysisValue(
+      isolationForest.decision_score,
+      effectiveFindings.anomaly_score,
+      record['Isolation score'],
+      record.anomaly_score
+    );
+
+    const analyzedAt = firstAnalysisValue(
+      record.analyzed_at,
+      record.created_at,
+      record.timestamp
+    );
+
+    return {
+      ...record,
+      evidence_id:
+        evidenceId === 'Not available' ? '' : evidenceId,
+      file_name:
+        fileName === 'Not available'
+          ? (evidenceId === 'Not available'
+            ? 'Unknown file'
+            : `Evidence ${evidenceId}`)
+          : fileName,
+      severity,
+      risk_level: severity,
+      risk_score: riskScore,
+      random_forest_prediction: prediction,
+      confidence,
+      anomaly_result: anomaly,
+      anomaly_score: anomalyScore,
+      analyzed_at:
+        analyzedAt === 'Not available'
+          ? new Date().toISOString()
+          : analyzedAt,
+      raw_findings: effectiveFindings
+    };
+  }
+
   function renderAnalysisResults(rows) {
     const body = byId('analysis-results-body');
     if (!body) return;
@@ -1097,7 +1296,7 @@
       cell.colSpan = 7;
       cell.className = 'empty-cell';
       cell.textContent =
-        'No analysis results are available for this case yet.';
+        'No saved analysis results are available for this case yet.';
 
       row.appendChild(cell);
       body.appendChild(row);
@@ -1108,30 +1307,33 @@
       const row = document.createElement('tr');
 
       const risk = String(
-        item.risk_level || item.severity || '—'
+        item.risk_level ??
+        item.severity ??
+        item.rule_severity ??
+        'Not available'
       );
 
-      const prediction =
-        item.random_forest_prediction ??
-        item.prediction ??
-        item.ml_prediction ??
-        '—';
+      const prediction = firstAnalysisValue(
+        item.random_forest_prediction,
+        item.prediction,
+        item.ml_prediction
+      );
 
-      const confidence =
-        item.confidence ??
-        item.model_confidence ??
-        '—';
+      const confidence = firstAnalysisValue(
+        item.confidence,
+        item.model_confidence
+      );
 
-      const anomaly =
-        item.anomaly_result ??
-        item.anomaly ??
-        item.anomaly_detected ??
-        '—';
+      const anomaly = firstAnalysisValue(
+        item.anomaly_result,
+        item.anomaly,
+        item.anomaly_detected
+      );
 
       const values = [
-        item.file_name || item.evidence_id || '—',
+        item.file_name || item.evidence_id || 'Unknown file',
         risk,
-        item.risk_score ?? item.anomaly_score ?? '—',
+        item.risk_score ?? 'Not available',
         prediction,
         confidence,
         anomaly,
@@ -1151,7 +1353,10 @@
             normalized.includes('critical')
           ) {
             cell.classList.add('text-danger');
-          } else if (normalized.includes('low')) {
+          } else if (
+            normalized.includes('low') ||
+            normalized.includes('no indicator')
+          ) {
             cell.classList.add('text-success');
           }
         }
@@ -1162,11 +1367,12 @@
           if (
             normalized === 'true' ||
             normalized.includes('detected') ||
-            normalized.includes('anomaly')
+            normalized === 'anomaly'
           ) {
             cell.classList.add('text-danger');
           } else if (
             normalized === 'false' ||
+            normalized.includes('not flagged') ||
             normalized.includes('normal') ||
             normalized.includes('clean')
           ) {
@@ -1177,107 +1383,163 @@
         row.appendChild(cell);
       });
 
+      row.classList.add('clickable-row');
+      row.tabIndex = 0;
+
+      row.addEventListener('click', () => {
+        const detail = byId('analysis-detail');
+        const pre = byId('analysis-detail-json');
+
+        if (detail) detail.hidden = false;
+
+        if (pre) {
+          pre.textContent = JSON.stringify(
+            item.raw_findings || item,
+            null,
+            2
+          );
+        }
+      });
+
       body.appendChild(row);
     });
   }
 
-  async function loadAnalysis() {
-  const caseId = value('analysis-case');
+  function updateAnalysisMetrics(evidenceCount, savedCount, resultCount) {
+    setText('analysis-evidence-count', evidenceCount);
+    setText('analysis-saved-count', savedCount);
+    setText('analysis-result-count', resultCount);
 
-  if (!caseId) {
-    state.analysisRows = [];
-    state.analysisCase = '';
-    renderAnalysisResults([]);
-    return;
+    const csvButton = byId('export-analysis-csv');
+    const jsonButton = byId('export-analysis-json');
+
+    if (csvButton) csvButton.disabled = resultCount === 0;
+    if (jsonButton) jsonButton.disabled = resultCount === 0;
   }
 
-  try {
-    // Fetch saved analyses and evidence metadata together.
-    const [data, evidence] = await Promise.all([
-      api(`/api/analysis?case_id=${encodeURIComponent(caseId)}`),
-      loadEvidence(caseId)
-    ]);
+  async function loadAnalysis() {
+    const caseId = value('analysis-case');
 
-    const evidenceById = new Map(
-      evidence.map(item => [item.evidence_id, item])
-    );
+    if (!caseId) {
+      state.analysisRows = [];
+      state.analysisCase = '';
 
-    // The API stores analysis fields inside result.findings.
-    // Convert them into the flat structure expected by the table.
-    state.analysisRows = (Array.isArray(data.results) ? data.results : [])
-      .map(result => {
-        const findings =
-          result.findings && typeof result.findings === 'object'
-            ? result.findings
-            : {};
+      renderAnalysisResults([]);
+      updateAnalysisMetrics(0, 0, 0);
 
-        const aiModels = findings.ai_models || {};
-        const randomForest = aiModels.random_forest || {};
-        const isolationForest = aiModels.isolation_forest || {};
+      return;
+    }
 
-        const evidenceRecord =
-          evidenceById.get(result.evidence_id) || {};
+    try {
+      // Load saved analysis first. Evidence metadata is supplementary.
+      const analysisData = await api(
+        `/api/analysis?case_id=${encodeURIComponent(caseId)}`
+      );
 
-        return {
-          ...result,
+      let evidence = [];
 
-          file_name:
-            evidenceRecord.file_name ||
-            result.file_name ||
-            'Unknown file',
+      try {
+        evidence = await loadEvidence(caseId);
+      } catch (evidenceError) {
+        console.warn(
+          'DataLens: evidence metadata could not be loaded for analysis labels.',
+          evidenceError
+        );
+      }
 
-          severity:
-            findings.severity ??
-            findings.risk_level ??
-            'Not available',
+      const evidenceById = new Map();
 
-          risk_level:
-            findings.severity ??
-            findings.risk_level ??
-            'Not available',
+      (Array.isArray(evidence) ? evidence : []).forEach(item => {
+        const id = item.evidence_id ?? item.id;
 
-          risk_score:
-            findings.risk_score ??
-            'Not available',
-
-          random_forest_prediction:
-            randomForest.prediction ??
-            'Not available',
-
-          confidence:
-            typeof randomForest.confidence === 'number'
-              ? `${(randomForest.confidence * 100).toFixed(1)}%`
-              : 'N/A',
-
-          anomaly_result:
-            isolationForest.result ??
-            'Not available',
-
-          anomaly_score:
-            isolationForest.decision_score ??
-            'N/A',
-
-          findings
-        };
+        if (id !== undefined && id !== null) {
+          evidenceById.set(id, item);
+          evidenceById.set(String(id), item);
+        }
       });
 
-    state.analysisCase = caseId;
+      const savedResults = Array.isArray(analysisData.results)
+        ? analysisData.results
+        : Array.isArray(analysisData.analyses)
+          ? analysisData.analyses
+          : [];
 
-    renderAnalysisResults(state.analysisRows);
+      // API returns newest saved rows first. Keep the newest per evidence ID.
+      const latestByEvidence = new Map();
 
-  } catch (error) {
-    state.analysisRows = [];
-    renderAnalysisResults([]);
+      savedResults.forEach(result => {
+        const normalized = normalizeAnalysisRecord(
+          result,
+          evidenceById
+        );
 
-    showMessage(
-      'analysis-message',
-      `Could not load analysis results: ${error.message}`,
-      'error'
-    );
+        const id =
+          normalized.evidence_id ||
+          normalized.analysis_id;
 
-    throw error;
+        if (id && !latestByEvidence.has(id)) {
+          latestByEvidence.set(id, normalized);
+        }
+      });
+
+      state.analysisRows = Array.from(latestByEvidence.values());
+      state.analysisCase = caseId;
+
+      renderAnalysisResults(state.analysisRows);
+
+      updateAnalysisMetrics(
+        evidence.length,
+        savedResults.length,
+        state.analysisRows.length
+      );
+
+      const detail = byId('analysis-detail');
+      if (detail) detail.hidden = true;
+
+      const csvButton = byId('export-analysis-csv');
+      const jsonButton = byId('export-analysis-json');
+
+      if (csvButton) csvButton.disabled = !state.analysisRows.length;
+      if (jsonButton) jsonButton.disabled = !state.analysisRows.length;
+
+      clearMessage('analysis-message');
+
+      if (savedResults.length && !state.analysisRows.length) {
+        showMessage(
+          'analysis-message',
+          'The server returned saved analysis records, but none contained an evidence or analysis ID that could be displayed.',
+          'error'
+        );
+      } else if (
+        state.analysisRows.length &&
+        state.analysisRows.every(row =>
+          row.risk_score === 'Not available' &&
+          row.severity === 'Not available' &&
+          row.random_forest_prediction === 'Not available'
+        )
+      ) {
+        showMessage(
+          'analysis-message',
+          'Analysis records were found, but the saved findings contain no risk or model fields. The backend analysis output needs checking.',
+          'error'
+        );
+      }
+    } catch (error) {
+      state.analysisRows = [];
+
+      renderAnalysisResults([]);
+      updateAnalysisMetrics(0, 0, 0);
+
+      showMessage(
+        'analysis-message',
+        `Could not load saved analysis results: ${error.message}`,
+        'error'
+      );
+
+      throw error;
+    }
   }
-}
+
   async function runAnalysis() {
     const caseId = value('analysis-case');
 
@@ -1307,13 +1569,123 @@
         }
       });
 
-      showMessage(
-        'analysis-message',
-        result.message || 'Analysis completed.',
-        'success'
+      const analysis = parseAnalysisObject(
+        result.analysis ?? result
       );
 
-      await loadAnalysis();
+      const immediateResults = Array.isArray(analysis.results)
+        ? analysis.results
+        : [];
+
+      // Use the direct analysis response immediately.
+      if (immediateResults.length) {
+        let evidence = [];
+
+        try {
+          evidence = await loadEvidence(caseId);
+        } catch (evidenceError) {
+          console.warn(
+            'DataLens: could not refresh evidence names after analysis.',
+            evidenceError
+          );
+        }
+
+        const evidenceById = new Map();
+
+        evidence.forEach(item => {
+          const id = item.evidence_id ?? item.id;
+
+          if (id !== undefined && id !== null) {
+            evidenceById.set(id, item);
+            evidenceById.set(String(id), item);
+          }
+        });
+
+        state.analysisRows = immediateResults.map(item =>
+          normalizeAnalysisRecord(item, evidenceById)
+        );
+
+        state.analysisCase = caseId;
+
+        renderAnalysisResults(state.analysisRows);
+
+        updateAnalysisMetrics(
+          analysis.total_evidence ?? evidence.length,
+          analysis.analyzed ?? immediateResults.length,
+          state.analysisRows.length
+        );
+      }
+
+      const skipped = Array.isArray(analysis.skipped)
+        ? analysis.skipped
+        : [];
+
+      const analyzedCount = Number(
+        analysis.analyzed ?? immediateResults.length
+      );
+
+      const message =
+        `Analysis completed for ${analyzedCount} evidence item(s).` +
+        (skipped.length
+          ? ` ${skipped.length} item(s) were skipped; review the server response and evidence files.`
+          : '') +
+        ' Results are experimental triage indicators, not a definitive malware verdict.';
+
+      showMessage(
+        'analysis-message',
+        message,
+        skipped.length ? 'error' : 'success'
+      );
+
+      // Refresh from saved records. If those records are incomplete,
+      // keep the valid direct results returned by the POST request.
+      const directRows = state.analysisRows.slice();
+
+      try {
+        await loadAnalysis();
+
+        const persistedHasFindings = state.analysisRows.some(row =>
+          row.risk_score !== 'Not available' ||
+          row.severity !== 'Not available' ||
+          row.random_forest_prediction !== 'Not available' ||
+          row.anomaly_result !== 'Not available'
+        );
+
+        if (
+          directRows.length &&
+          (!state.analysisRows.length || !persistedHasFindings)
+        ) {
+          state.analysisRows = directRows;
+          state.analysisCase = caseId;
+
+          renderAnalysisResults(state.analysisRows);
+
+          updateAnalysisMetrics(
+            analysis.total_evidence ?? directRows.length,
+            analysis.analyzed ?? directRows.length,
+            directRows.length
+          );
+
+          showMessage(
+            'analysis-message',
+            'Analysis ran successfully. Displaying the direct analysis response because the saved-results endpoint returned incomplete finding fields.',
+            'success'
+          );
+        }
+      } catch (refreshError) {
+        if (directRows.length) {
+          state.analysisRows = directRows;
+          state.analysisCase = caseId;
+
+          renderAnalysisResults(state.analysisRows);
+        }
+
+        console.warn(
+          'DataLens: saved results could not be refreshed after analysis.',
+          refreshError
+        );
+      }
+
       await loadDashboard();
     } catch (error) {
       showMessage('analysis-message', error.message, 'error');
@@ -1386,7 +1758,7 @@
     link.click();
     link.remove();
 
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // ------------------------------------------------------------
@@ -2216,13 +2588,14 @@
       button.addEventListener('click', () => {
         navigate(button.dataset.page);
       });
-      // Handle dashboard shortcuts such as New Case and View Cases.
+    });
+
+    // Dashboard shortcuts such as New Case and View Cases
     $$('[data-go-page]').forEach(button => {
       button.addEventListener('click', event => {
         event.preventDefault();
         navigate(button.dataset.goPage);
       });
-    });
     });
 
     // Case creation
@@ -2281,6 +2654,13 @@
     byId('run-analysis')?.addEventListener(
       'click',
       runAnalysis
+    );
+
+    byId('refresh-analysis')?.addEventListener(
+      'click',
+      () => loadAnalysis().catch(error => {
+        showMessage('analysis-message', error.message, 'error');
+      })
     );
 
     byId('export-analysis-csv')?.addEventListener(
