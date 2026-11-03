@@ -19,3 +19,5 @@ reports/
 .idea/
 .DS_Store
 Thumbs.db
+app_backup.py
+forensics_before_ml_fix.py.py
