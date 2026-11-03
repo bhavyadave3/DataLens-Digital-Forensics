@@ -1,13 +1,18 @@
+/* DataLens frontend controller
+   Handles UI and local API requests only.
+   Forensic operations remain in the Python modules.
+*/
 
-
-
-
-/* DataLens frontend controller. UI and API requests only; forensic operations remain in Python modules. */
 (() => {
   'use strict';
 
+  // ------------------------------------------------------------
+  // STATE AND HELPERS
+  // ------------------------------------------------------------
+
   const $ = (selector, root = document) => root.querySelector(selector);
-  const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const $$ = (selector, root = document) =>
+    Array.from(root.querySelectorAll(selector));
 
   const state = {
     cases: [],
@@ -16,9 +21,9 @@
     selectedDevice: null,
     recoveryCandidates: [],
     recoverySource: '',
-    currentPage: 'dashboard',
     analysisRows: [],
-    analysisCase: ''
+    analysisCase: '',
+    currentPage: 'dashboard'
   };
 
   const pageNames = {
@@ -36,37 +41,61 @@
   }
 
   function value(id, fallback = '') {
-    const el = byId(id);
-    return el ? String(el.value ?? fallback).trim() : fallback;
+    const element = byId(id);
+    return element
+      ? String(element.value ?? fallback).trim()
+      : fallback;
   }
 
   function actorFrom(...ids) {
     for (const id of ids) {
-      const found = value(id);
-      if (found) return found;
+      const name = value(id);
+      if (name) return name;
     }
+
     return value('investigator-name', 'Investigator') || 'Investigator';
   }
 
   function setText(id, text) {
-    const el = byId(id);
-    if (el) el.textContent = text == null ? '' : String(text);
+    const element = byId(id);
+    if (element) {
+      element.textContent = text == null ? '' : String(text);
+    }
   }
 
   function showMessage(id, message, kind = 'neutral') {
-    const el = byId(id);
-    if (!el) return;
+    const element = byId(id);
+    if (!element) return;
 
-    el.textContent = message;
-    el.className = `inline-message message-${kind}`;
-    el.hidden = false;
+    element.textContent = String(message ?? '');
+    element.className = `inline-message message-${kind}`;
+    element.hidden = false;
   }
 
   function clearMessage(id) {
-    const el = byId(id);
-    if (el) {
-      el.hidden = true;
-      el.textContent = '';
+    const element = byId(id);
+
+    if (element) {
+      element.hidden = true;
+      element.textContent = '';
+    }
+  }
+
+  function globalMessage(message, kind = 'neutral') {
+    const element = byId('global-message');
+    if (!element) return;
+
+    element.textContent = String(message ?? '');
+    element.className = `global-message message-${kind}`;
+    element.hidden = false;
+  }
+
+  function clearGlobalMessage() {
+    const element = byId('global-message');
+
+    if (element) {
+      element.hidden = true;
+      element.textContent = '';
     }
   }
 
@@ -74,30 +103,38 @@
     if (!button) return;
 
     if (busy) {
-      button.dataset.originalText = button.textContent;
+      if (!button.dataset.originalText) {
+        button.dataset.originalText = button.textContent;
+      }
+
       button.textContent = busyText;
       button.disabled = true;
       button.setAttribute('aria-busy', 'true');
     } else {
-      button.textContent = button.dataset.originalText || button.textContent;
+      button.textContent =
+        button.dataset.originalText || button.textContent;
+
+      delete button.dataset.originalText;
       button.disabled = false;
       button.removeAttribute('aria-busy');
     }
   }
 
   function formatBytes(bytes) {
-    const n = Number(bytes);
+    const number = Number(bytes);
 
-    if (!Number.isFinite(n) || n < 0) return 'Unknown';
-    if (n === 0) return '0 B';
+    if (!Number.isFinite(number) || number < 0) return 'Unknown';
+    if (number === 0) return '0 B';
 
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     const index = Math.min(
-      Math.floor(Math.log(n) / Math.log(1024)),
+      Math.floor(Math.log(number) / Math.log(1024)),
       units.length - 1
     );
 
-    return `${(n / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+    return `${(number / Math.pow(1024, index)).toFixed(
+      index === 0 ? 0 : 1
+    )} ${units[index]}`;
   }
 
   function formatDate(input) {
@@ -110,65 +147,91 @@
       : date.toLocaleString();
   }
 
-  function cellText(value) {
-    if (value === null || value === undefined || value === '') return '—';
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
+  function cellText(input) {
+    if (input === null || input === undefined || input === '') {
+      return '—';
+    }
+
+    if (typeof input === 'object') {
+      try {
+        return JSON.stringify(input);
+      } catch {
+        return String(input);
+      }
+    }
+
+    return String(input);
   }
 
-  function makeCell(text, options = {}) {
-    const td = document.createElement('td');
-    td.textContent = cellText(text);
+  function makeCell(content, options = {}) {
+    const cell = document.createElement('td');
+    cell.textContent = cellText(content);
 
-    if (options.mono) td.classList.add('mono');
-    if (options.tone) td.classList.add(options.tone);
+    if (options.mono) {
+      cell.classList.add('mono');
+    }
 
-    return td;
+    if (options.tone) {
+      cell.classList.add(options.tone);
+    }
+
+    return cell;
   }
 
-  function renderRows(id, rows, columns, emptyText = 'No records found.') {
-    const body = byId(id);
+  function renderRows(
+    bodyId,
+    rows,
+    columns,
+    emptyText = 'No records found.'
+  ) {
+    const body = byId(bodyId);
     if (!body) return;
 
     body.replaceChildren();
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
 
-      td.colSpan = columns.length;
-      td.className = 'empty-cell';
-      td.textContent = emptyText;
+      cell.colSpan = Math.max(columns.length, 1);
+      cell.className = 'empty-cell';
+      cell.textContent = emptyText;
 
-      tr.appendChild(td);
-      body.appendChild(tr);
+      row.appendChild(cell);
+      body.appendChild(row);
       return;
     }
 
-    rows.forEach(row => {
-      const tr = document.createElement('tr');
+    rows.forEach(item => {
+      const row = document.createElement('tr');
 
       columns.forEach(column => {
         const raw = typeof column.value === 'function'
-          ? column.value(row)
-          : row[column.key];
+          ? column.value(item)
+          : item[column.key];
 
-        const td = makeCell(raw, { mono: column.mono });
+        const cell = makeCell(raw, {
+          mono: column.mono
+        });
 
         if (column.tone) {
           const tone = typeof column.tone === 'function'
-            ? column.tone(row, raw)
+            ? column.tone(item, raw)
             : column.tone;
 
-          if (tone) td.classList.add(tone);
+          if (tone) cell.classList.add(tone);
         }
 
-        tr.appendChild(td);
+        row.appendChild(cell);
       });
 
-      body.appendChild(tr);
+      body.appendChild(row);
     });
   }
+
+  // ------------------------------------------------------------
+  // API HELPER
+  // ------------------------------------------------------------
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -186,31 +249,35 @@
       cache: 'no-store'
     });
 
-    const type = response.headers.get('content-type') || '';
-    const data = type.includes('application/json')
+    const contentType = response.headers.get('content-type') || '';
+
+    const data = contentType.includes('application/json')
       ? await response.json()
       : await response.text();
 
     if (!response.ok) {
-      throw new Error(
-        (data && data.error) || `Request failed (${response.status}).`
-      );
+      const message =
+        data && typeof data === 'object' && data.error
+          ? data.error
+          : `Request failed (${response.status}).`;
+
+      throw new Error(message);
     }
 
     return data;
   }
 
   function downloadReport(downloadUrl) {
-  if (!downloadUrl) {
-    throw new Error('The server did not provide a report download URL.');
-  }
+    if (!downloadUrl) {
+      throw new Error('The server did not provide a download URL.');
+    }
 
-  try {
     const url = new URL(downloadUrl, window.location.origin);
 
-    // Only allow downloads from the local DataLens service.
     if (url.origin !== window.location.origin) {
-      throw new Error('Report downloads must use the local DataLens service.');
+      throw new Error(
+        'Downloads must use the local DataLens server.'
+      );
     }
 
     const link = document.createElement('a');
@@ -220,36 +287,22 @@
     document.body.appendChild(link);
     link.click();
     link.remove();
-  } catch (error) {
-    throw new Error(`Could not download report: ${error.message}`);
-  }
-}
-
-function globalMessage(message, kind = 'neutral') {
-    const el = byId('global-message');
-    if (!el) return;
-
-    el.textContent = message;
-    el.className = `global-message message-${kind}`;
-    el.hidden = false;
   }
 
-  function clearGlobalMessage() {
-    const el = byId('global-message');
-
-    if (el) {
-      el.hidden = true;
-      el.textContent = '';
-    }
-  }
+  // ------------------------------------------------------------
+  // NAVIGATION
+  // ------------------------------------------------------------
 
   function navigate(page, updateHash = true) {
-    if (!pageNames[page]) page = 'dashboard';
+    if (!pageNames[page]) {
+      page = 'dashboard';
+    }
 
     state.currentPage = page;
 
     $$('[data-page-panel]').forEach(panel => {
       const active = panel.dataset.pagePanel === page;
+
       panel.classList.toggle('active', active);
       panel.hidden = !active;
     });
@@ -268,25 +321,82 @@ function globalMessage(message, kind = 'neutral') {
 
     setText('breadcrumb-current', pageNames[page]);
 
-    const sidebar = byId('sidebar');
-    const mobileButton = byId('mobile-menu-button');
+    byId('sidebar')?.classList.remove('sidebar-open');
+    byId('mobile-menu-button')?.setAttribute(
+      'aria-expanded',
+      'false'
+    );
 
-    if (sidebar) sidebar.classList.remove('sidebar-open');
-    if (mobileButton) mobileButton.setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('sidebar-menu-open');
 
     if (updateHash && location.hash !== `#${page}`) {
       history.replaceState(null, '', `#${page}`);
     }
 
     clearGlobalMessage();
-    refreshPage(page).catch(error => globalMessage(error.message, 'error'));
+
+    refreshPage(page).catch(error => {
+      globalMessage(error.message, 'error');
+    });
   }
+
+  async function refreshPage(page) {
+    switch (page) {
+      case 'dashboard':
+        await Promise.all([
+          loadDashboard(),
+          loadCases()
+        ]);
+        break;
+
+      case 'cases':
+        await loadCases();
+        break;
+
+      case 'acquire':
+        await loadCases();
+        await refreshAcquiredEvidence();
+        break;
+
+      case 'analysis':
+        await loadCases();
+        await loadAnalysis();
+        break;
+
+      case 'custody':
+        await loadCases();
+        await loadCustody();
+        break;
+
+      case 'recovery':
+        await loadCases();
+        renderRecoveryCandidates(state.recoveryCandidates);
+        break;
+
+      case 'system':
+        await Promise.all([
+          loadSystemChecks(),
+          refreshSystemDevices()
+        ]);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  // ------------------------------------------------------------
+  // CASE MANAGEMENT
+  // ------------------------------------------------------------
 
   async function loadCases() {
     const data = await api('/api/cases');
-    state.cases = Array.isArray(data.cases) ? data.cases : [];
 
-    const caseSelectIds = [
+    state.cases = Array.isArray(data.cases)
+      ? data.cases
+      : [];
+
+    const selectIds = [
       'selected-case',
       'acquire-case',
       'analysis-case',
@@ -294,7 +404,7 @@ function globalMessage(message, kind = 'neutral') {
       'recovery-case'
     ];
 
-    caseSelectIds.forEach(id => {
+    selectIds.forEach(id => {
       const select = byId(id);
       if (!select) return;
 
@@ -315,6 +425,7 @@ function globalMessage(message, kind = 'neutral') {
 
       state.cases.forEach(item => {
         const option = document.createElement('option');
+
         option.value = item.case_id || '';
         option.textContent =
           `${item.case_name || 'Untitled case'} · ${item.case_id || ''}`;
@@ -347,116 +458,102 @@ function globalMessage(message, kind = 'neutral') {
         { key: 'case_name' },
         { key: 'case_id', mono: true },
         { key: 'status' },
-        { key: 'created_at', value: r => formatDate(r.created_at) },
+        {
+          key: 'created_at',
+          value: row => formatDate(row.created_at)
+        },
         { key: 'description' }
       ],
       'No cases yet. Create your first case using the form.'
     );
 
-    const selected = value('selected-case');
-    const selectedCase = state.cases.find(
-      item => item.case_id === selected
+    updateSelectedCaseSummary();
+    updateAcquireButton();
+    renderUploadList();
+  }
+
+  function updateSelectedCaseSummary() {
+    const caseId = value('selected-case');
+
+    const selected = state.cases.find(
+      item => item.case_id === caseId
     );
 
     setText(
       'selected-case-summary',
-      selectedCase
-        ? `${selectedCase.case_name || 'Untitled case'} · ${selectedCase.status || 'Status not reported'}`
+      selected
+        ? `${selected.case_name || 'Untitled case'} · ${selected.status || 'Status not reported'}`
         : 'No case selected.'
     );
   }
-    async function loadDashboard() {
-    const data = await api('/api/dashboard');
 
-    setText('metric-cases', data.cases_count ?? 0);
-    setText('metric-evidence', data.evidence_count ?? 0);
-    setText('metric-analyses', data.saved_analyses_count ?? 0);
-    setText(
-      'metric-vault',
-      data.vault_usage_display || formatBytes(data.vault_usage_bytes)
-    );
+  function syncCaseSelection(sourceId) {
+    const source = byId(sourceId);
+    if (!source) return;
 
-    setText(
-      'metric-vault-note',
-      `of ${formatBytes(data.vault_limit_bytes)} configured capacity`
-    );
+    const caseId = source.value;
 
-    const percent = data.vault_limit_bytes
-      ? Math.min(
-          100,
-          (Number(data.vault_usage_bytes || 0) /
-            Number(data.vault_limit_bytes)) * 100
+    if (caseId) {
+      localStorage.setItem('datalens-selected-case', caseId);
+    }
+
+    [
+      'selected-case',
+      'acquire-case',
+      'analysis-case',
+      'custody-case',
+      'recovery-case'
+    ].forEach(id => {
+      const target = byId(id);
+
+      if (
+        target &&
+        target !== source &&
+        Array.from(target.options).some(
+          option => option.value === caseId
         )
-      : 0;
+      ) {
+        target.value = caseId;
+      }
+    });
 
-    const progress = byId('vault-progress');
+    updateSelectedCaseSummary();
+    updateAcquireButton();
+    renderUploadList();
 
-    if (progress) {
-      progress.style.width = `${percent.toFixed(2)}%`;
+    if (state.currentPage === 'acquire') {
+      refreshAcquiredEvidence().catch(error => {
+        showMessage('upload-message', error.message, 'error');
+      });
     }
 
-    setText(
-      'dashboard-updated',
-      `Updated ${formatDate(data.generated_at)}`
-    );
-
-    renderRows(
-      'dashboard-recent-cases',
-      data.recent_cases || [],
-      [
-        { key: 'case_name' },
-        { key: 'case_id', mono: true },
-        { key: 'created_at', value: r => formatDate(r.created_at) },
-        { key: 'status' }
-      ],
-      'No cases have been created yet.'
-    );
-
-    renderRows(
-      'dashboard-recent-evidence',
-      data.recent_evidence || [],
-      [
-        { key: 'file_name' },
-        { key: 'evidence_id', mono: true },
-        {
-          key: 'sha256',
-          mono: true,
-          value: r => r.sha256
-            ? `${String(r.sha256).slice(0, 20)}…`
-            : '—'
-        },
-        { key: 'acquired_at', value: r => formatDate(r.acquired_at) }
-      ],
-      'No evidence has been registered yet.'
-    );
-  }
-
-  async function loadEvidence(caseId) {
-    if (!caseId) {
-      state.evidence = [];
-      return [];
+    if (state.currentPage === 'analysis') {
+      loadAnalysis().catch(error => {
+        showMessage('analysis-message', error.message, 'error');
+      });
     }
 
-    const data = await api(
-      `/api/evidence?case_id=${encodeURIComponent(caseId)}`
-    );
+    if (state.currentPage === 'custody') {
+      loadCustody().catch(error => {
+        showMessage('verify-message', error.message, 'error');
+      });
+    }
 
-    state.evidence = Array.isArray(data.evidence)
-      ? data.evidence
-      : [];
-
-    return state.evidence;
-  }
-
-  async function refreshCasesPage() {
-    await loadCases();
+    if (state.currentPage === 'recovery') {
+      state.recoveryCandidates = [];
+      state.recoverySource = '';
+      renderRecoveryCandidates([]);
+      clearMessage('recovery-message');
+    }
   }
 
   async function createCase(event) {
     event.preventDefault();
+
     clearMessage('create-case-message');
 
-    const button = $('#create-case-form button[type="submit"]');
+    const form = byId('create-case-form');
+    const button = form?.querySelector('button[type="submit"]');
 
     const payload = {
       case_name: value('case-name'),
@@ -493,8 +590,8 @@ function globalMessage(message, kind = 'neutral') {
           'custody-case',
           'recovery-case'
         ].forEach(id => {
-          const el = byId(id);
-          if (el) el.value = created.case_id;
+          const select = byId(id);
+          if (select) select.value = created.case_id;
         });
 
         localStorage.setItem(
@@ -503,10 +600,7 @@ function globalMessage(message, kind = 'neutral') {
         );
       }
 
-      setText(
-        'selected-case-summary',
-        `${created.case_name || payload.case_name} · ${created.status || 'Created'}`
-      );
+      updateSelectedCaseSummary();
 
       showMessage(
         'create-case-message',
@@ -514,7 +608,7 @@ function globalMessage(message, kind = 'neutral') {
         'success'
       );
 
-      byId('create-case-form').reset();
+      form?.reset();
 
       const investigator = byId('investigator-name');
       if (investigator) investigator.value = payload.actor;
@@ -531,54 +625,103 @@ function globalMessage(message, kind = 'neutral') {
     }
   }
 
-  function syncCaseSelection(sourceId) {
-    const source = byId(sourceId);
-    if (!source) return;
+  // ------------------------------------------------------------
+  // DASHBOARD
+  // ------------------------------------------------------------
 
-    const caseId = source.value;
+  async function loadDashboard() {
+    const data = await api('/api/dashboard');
 
-    if (caseId) {
-      localStorage.setItem('datalens-selected-case', caseId);
+    setText('metric-cases', data.cases_count ?? 0);
+    setText('metric-evidence', data.evidence_count ?? 0);
+    setText('metric-analyses', data.saved_analyses_count ?? 0);
+
+    setText(
+      'metric-vault',
+      data.vault_usage_display ||
+        formatBytes(data.vault_usage_bytes)
+    );
+
+    setText(
+      'metric-vault-note',
+      `of ${formatBytes(data.vault_limit_bytes)} configured capacity`
+    );
+
+    const percent = data.vault_limit_bytes
+      ? Math.min(
+          100,
+          (Number(data.vault_usage_bytes || 0) /
+            Number(data.vault_limit_bytes)) * 100
+        )
+      : 0;
+
+    const progress = byId('vault-progress');
+
+    if (progress) {
+      progress.style.width = `${percent.toFixed(2)}%`;
     }
 
-    if (sourceId === 'selected-case') {
-      setText(
-        'selected-case-summary',
-        state.cases.find(item => item.case_id === caseId)?.case_name ||
-          'No case selected.'
-      );
+    setText(
+      'dashboard-updated',
+      `Updated ${formatDate(data.generated_at)}`
+    );
+
+    renderRows(
+      'dashboard-recent-cases',
+      data.recent_cases || [],
+      [
+        { key: 'case_name' },
+        { key: 'case_id', mono: true },
+        {
+          key: 'created_at',
+          value: row => formatDate(row.created_at)
+        },
+        { key: 'status' }
+      ],
+      'No cases have been created yet.'
+    );
+
+    renderRows(
+      'dashboard-recent-evidence',
+      data.recent_evidence || [],
+      [
+        { key: 'file_name' },
+        { key: 'evidence_id', mono: true },
+        {
+          key: 'sha256',
+          mono: true,
+          value: row => row.sha256
+            ? `${String(row.sha256).slice(0, 20)}…`
+            : '—'
+        },
+        {
+          key: 'acquired_at',
+          value: row => formatDate(row.acquired_at)
+        }
+      ],
+      'No evidence has been registered yet.'
+    );
+  }
+
+  // ------------------------------------------------------------
+  // EVIDENCE ACQUISITION
+  // ------------------------------------------------------------
+
+  async function loadEvidence(caseId) {
+    if (!caseId) {
+      state.evidence = [];
+      return [];
     }
 
-    [
-      'selected-case',
-      'acquire-case',
-      'analysis-case',
-      'custody-case',
-      'recovery-case'
-    ].forEach(id => {
-      const target = byId(id);
+    const data = await api(
+      `/api/evidence?case_id=${encodeURIComponent(caseId)}`
+    );
 
-      if (
-        target &&
-        target !== source &&
-        caseId &&
-        Array.from(target.options).some(option => option.value === caseId)
-      ) {
-        target.value = caseId;
-      }
-    });
+    state.evidence = Array.isArray(data.evidence)
+      ? data.evidence
+      : [];
 
-    if (state.currentPage === 'acquire') {
-      refreshAcquiredEvidence().catch(showError);
-    }
-
-    if (state.currentPage === 'analysis') {
-      loadAnalysis().catch(showError);
-    }
-
-    if (state.currentPage === 'custody') {
-      loadCustody().catch(showError);
-    }
+    return state.evidence;
   }
 
   async function refreshAcquiredEvidence() {
@@ -591,19 +734,27 @@ function globalMessage(message, kind = 'neutral') {
       [
         { key: 'file_name' },
         { key: 'evidence_id', mono: true },
-        { key: 'size_bytes', value: r => formatBytes(r.size_bytes) },
+        {
+          key: 'size_bytes',
+          value: row => formatBytes(row.size_bytes)
+        },
         { key: 'sha256', mono: true },
-        { key: 'acquired_at', value: r => formatDate(r.acquired_at) }
+        {
+          key: 'acquired_at',
+          value: row => formatDate(row.acquired_at)
+        }
       ],
       'No evidence registered in this case yet.'
     );
   }
-    async function detectDevices() {
+
+  async function detectDevices() {
     const container = byId('device-list');
     const button = byId('detect-devices');
 
     if (container) {
-      container.textContent = 'Detecting mounted removable volumes…';
+      container.textContent =
+        'Detecting mounted removable volumes…';
     }
 
     setBusy(button, true, 'Detecting…');
@@ -611,13 +762,16 @@ function globalMessage(message, kind = 'neutral') {
     try {
       const data = await api('/api/devices');
 
-      state.devices = Array.isArray(data.devices) ? data.devices : [];
-      state.selectedDevice = null;
+      state.devices = Array.isArray(data.devices)
+        ? data.devices
+        : [];
 
+      state.selectedDevice = null;
       renderDevices();
     } catch (error) {
       if (container) {
-        container.textContent = `Device detection failed: ${error.message}`;
+        container.textContent =
+          `Device detection failed: ${error.message}`;
       }
 
       showMessage('device-message', error.message, 'error');
@@ -633,7 +787,9 @@ function globalMessage(message, kind = 'neutral') {
     container.replaceChildren();
 
     const controls = byId('device-acquire-controls');
-    if (controls) controls.hidden = !state.devices.length;
+    if (controls) {
+      controls.hidden = !state.devices.length;
+    }
 
     const acquireButton = byId('acquire-device');
     if (acquireButton) acquireButton.disabled = true;
@@ -642,14 +798,15 @@ function globalMessage(message, kind = 'neutral') {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
 
-      const strong = document.createElement('strong');
-      strong.textContent = 'No mounted removable volumes detected';
+      const title = document.createElement('strong');
+      title.textContent =
+        'No mounted removable volumes detected';
 
-      const p = document.createElement('p');
-      p.textContent =
+      const detail = document.createElement('p');
+      detail.textContent =
         'You can acquire individual files using the upload panel.';
 
-      empty.append(strong, p);
+      empty.append(title, detail);
       container.appendChild(empty);
       return;
     }
@@ -680,11 +837,14 @@ function globalMessage(message, kind = 'neutral') {
       const meta = document.createElement('span');
       meta.className = 'device-card-meta';
       meta.textContent =
-        `${mountpoint || 'No mount point'} · ${formatBytes(device.size_bytes ?? device.size)} · ${device.filesystem || device.fstype || 'Filesystem unknown'}`;
+        `${mountpoint || 'No mount point'} · ` +
+        `${formatBytes(device.size_bytes ?? device.size)} · ` +
+        `${device.filesystem || device.fstype || 'Filesystem unknown'}`;
 
       const detail = document.createElement('small');
       detail.textContent =
-        `Removable: ${cellText(device.removable ?? 'Not reported')} · Type: ${cellText(device.transport || device.type || device.device_type || 'Not reported')}`;
+        `Removable: ${cellText(device.removable ?? 'Not reported')} · ` +
+        `Type: ${cellText(device.transport || device.type || 'Not reported')}`;
 
       card.append(title, meta, detail);
 
@@ -746,6 +906,7 @@ function globalMessage(message, kind = 'neutral') {
     }
 
     const button = byId('acquire-device');
+
     setBusy(button, true, 'Acquiring files…');
     clearMessage('device-message');
 
@@ -756,7 +917,10 @@ function globalMessage(message, kind = 'neutral') {
           case_id: caseId,
           mountpoint: device._mountpoint,
           authorized: true,
-          actor: actorFrom('acquire-investigator', 'investigator-name')
+          actor: actorFrom(
+            'acquire-investigator',
+            'investigator-name'
+          )
         }
       });
 
@@ -784,19 +948,24 @@ function globalMessage(message, kind = 'neutral') {
         const result = String(reader.result || '');
         const comma = result.indexOf(',');
 
-        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        resolve(
+          comma >= 0 ? result.slice(comma + 1) : result
+        );
       };
 
-      reader.onerror = () => reject(
-        new Error(`Could not read ${file.name}.`)
-      );
+      reader.onerror = () => {
+        reject(new Error(`Could not read ${file.name}.`));
+      };
 
       reader.readAsDataURL(file);
     });
   }
 
   function renderUploadList() {
-    const files = Array.from(byId('evidence-files')?.files || []);
+    const files = Array.from(
+      byId('evidence-files')?.files || []
+    );
+
     const list = byId('selected-upload-list');
 
     if (list) {
@@ -827,7 +996,10 @@ function globalMessage(message, kind = 'neutral') {
   async function uploadEvidence(event) {
     event.preventDefault();
 
-    const files = Array.from(byId('evidence-files')?.files || []);
+    const files = Array.from(
+      byId('evidence-files')?.files || []
+    );
+
     const caseId = value('acquire-case');
 
     if (!caseId || !files.length) {
@@ -840,6 +1012,7 @@ function globalMessage(message, kind = 'neutral') {
     }
 
     const button = byId('upload-evidence-button');
+
     setBusy(button, true, 'Reading files…');
     clearMessage('upload-message');
 
@@ -853,14 +1026,14 @@ function globalMessage(message, kind = 'neutral') {
         });
       }
 
-      if (
-        encodedFiles.reduce(
-          (total, item) => total + item.data_base64.length,
-          0
-        ) > 500 * 1024 * 1024
-      ) {
+      const totalSize = encodedFiles.reduce(
+        (total, item) => total + item.data_base64.length,
+        0
+      );
+
+      if (totalSize > 500 * 1024 * 1024) {
         throw new Error(
-          'Selected uploads are too large for the current local API request limit. Acquire fewer or smaller files at a time.'
+          'Selected uploads are too large for the current local API request limit. Upload fewer or smaller files at a time.'
         );
       }
 
@@ -868,29 +1041,31 @@ function globalMessage(message, kind = 'neutral') {
         method: 'POST',
         body: {
           case_id: caseId,
-          actor: actorFrom('acquire-investigator', 'investigator-name'),
+          actor: actorFrom(
+            'acquire-investigator',
+            'investigator-name'
+          ),
           files: encodedFiles
         }
       });
 
+      let message =
+        `Acquisition finished: ${result.successful || 0} succeeded; ` +
+        `${result.failed || 0} failed.`;
+
+      const failures = (result.results || [])
+        .filter(item => !item.ok)
+        .map(item => `${item.file_name}: ${item.error}`);
+
+      if (failures.length) {
+        message += ` ${failures.join(' | ')}`;
+      }
+
       showMessage(
         'upload-message',
-        `Acquisition finished: ${result.successful || 0} succeeded; ${result.failed || 0} failed.`,
+        message,
         result.failed ? 'error' : 'success'
       );
-
-      if (result.results?.some(item => !item.ok)) {
-        const errors = result.results
-          .filter(item => !item.ok)
-          .map(item => `${item.file_name}: ${item.error}`)
-          .join(' | ');
-
-        showMessage(
-          'upload-message',
-          `Acquisition finished: ${result.successful || 0} succeeded; ${result.failed || 0} failed. ${errors}`,
-          'error'
-        );
-      }
 
       byId('evidence-files').value = '';
       renderUploadList();
@@ -904,28 +1079,111 @@ function globalMessage(message, kind = 'neutral') {
       renderUploadList();
     }
   }
-    function renderAnalysisResults(rows) {
-    renderRows(
-      'analysis-results-body',
-      rows,
-      [
-        { key: 'file_name' },
-        { key: 'risk_level', tone: row => {
-          const risk = String(row.risk_level || '').toLowerCase();
-          if (risk === 'high' || risk === 'critical') return 'text-danger';
-          if (risk === 'low') return 'text-success';
-          return '';
-        }},
-        { key: 'anomaly_score' },
-        { key: 'prediction' },
-        { key: 'details' }
-      ],
-      'No analysis results are available for this case yet.'
-    );
+
+  // ------------------------------------------------------------
+  // ANALYSIS
+  // ------------------------------------------------------------
+
+  function renderAnalysisResults(rows) {
+    const body = byId('analysis-results-body');
+    if (!body) return;
+
+    body.replaceChildren();
+
+    if (!Array.isArray(rows) || !rows.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+
+      cell.colSpan = 7;
+      cell.className = 'empty-cell';
+      cell.textContent =
+        'No analysis results are available for this case yet.';
+
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+
+    rows.forEach(item => {
+      const row = document.createElement('tr');
+
+      const risk = String(
+        item.risk_level || item.severity || '—'
+      );
+
+      const prediction =
+        item.random_forest_prediction ??
+        item.prediction ??
+        item.ml_prediction ??
+        '—';
+
+      const confidence =
+        item.confidence ??
+        item.model_confidence ??
+        '—';
+
+      const anomaly =
+        item.anomaly_result ??
+        item.anomaly ??
+        item.anomaly_detected ??
+        '—';
+
+      const values = [
+        item.file_name || item.evidence_id || '—',
+        risk,
+        item.risk_score ?? item.anomaly_score ?? '—',
+        prediction,
+        confidence,
+        anomaly,
+        formatDate(item.analyzed_at || item.created_at)
+      ];
+
+      values.forEach((entry, index) => {
+        const cell = makeCell(entry, {
+          mono: index === 0
+        });
+
+        if (index === 1) {
+          const normalized = risk.toLowerCase();
+
+          if (
+            normalized.includes('high') ||
+            normalized.includes('critical')
+          ) {
+            cell.classList.add('text-danger');
+          } else if (normalized.includes('low')) {
+            cell.classList.add('text-success');
+          }
+        }
+
+        if (index === 5) {
+          const normalized = String(anomaly).toLowerCase();
+
+          if (
+            normalized === 'true' ||
+            normalized.includes('detected') ||
+            normalized.includes('anomaly')
+          ) {
+            cell.classList.add('text-danger');
+          } else if (
+            normalized === 'false' ||
+            normalized.includes('normal') ||
+            normalized.includes('clean')
+          ) {
+            cell.classList.add('text-success');
+          }
+        }
+
+        row.appendChild(cell);
+      });
+
+      body.appendChild(row);
+    });
   }
 
   async function loadAnalysis() {
     const caseId = value('analysis-case');
+
     if (!caseId) {
       state.analysisRows = [];
       state.analysisCase = '';
@@ -942,6 +1200,7 @@ function globalMessage(message, kind = 'neutral') {
       : [];
 
     state.analysisCase = caseId;
+
     renderAnalysisResults(state.analysisRows);
   }
 
@@ -949,11 +1208,16 @@ function globalMessage(message, kind = 'neutral') {
     const caseId = value('analysis-case');
 
     if (!caseId) {
-      showMessage('analysis-message', 'Select a case first.', 'error');
+      showMessage(
+        'analysis-message',
+        'Select a case first.',
+        'error'
+      );
       return;
     }
 
     const button = byId('run-analysis');
+
     setBusy(button, true, 'Analyzing…');
     clearMessage('analysis-message');
 
@@ -962,7 +1226,10 @@ function globalMessage(message, kind = 'neutral') {
         method: 'POST',
         body: {
           case_id: caseId,
-          actor: actorFrom('analysis-investigator', 'investigator-name')
+          actor: actorFrom(
+            'analysis-investigator',
+            'investigator-name'
+          )
         }
       });
 
@@ -993,28 +1260,31 @@ function globalMessage(message, kind = 'neutral') {
       return;
     }
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-');
+
     const caseId = state.analysisCase || 'case';
 
     let content;
-    let type;
+    let mimeType;
     let extension;
 
     if (format === 'json') {
       content = JSON.stringify(rows, null, 2);
-      type = 'application/json;charset=utf-8';
+      mimeType = 'application/json;charset=utf-8';
       extension = 'json';
     } else {
       const columns = Array.from(
         new Set(rows.flatMap(row => Object.keys(row)))
       );
 
-      const escapeCSV = value => {
-        const text = value === null || value === undefined
+      const escapeCSV = input => {
+        const text = input === null || input === undefined
           ? ''
-          : typeof value === 'object'
-            ? JSON.stringify(value)
-            : String(value);
+          : typeof input === 'object'
+            ? JSON.stringify(input)
+            : String(input);
 
         return `"${text.replace(/"/g, '""')}"`;
       };
@@ -1026,23 +1296,32 @@ function globalMessage(message, kind = 'neutral') {
         )
       ].join('\r\n');
 
-      type = 'text/csv;charset=utf-8';
+      mimeType = 'text/csv;charset=utf-8';
       extension = 'csv';
     }
 
-    const blob = new Blob([content], { type });
+    const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
 
+    const link = document.createElement('a');
     link.href = url;
-    link.download = `datalens-analysis-${caseId}-${timestamp}.${extension}`;
+    link.download =
+      `datalens-analysis-${caseId}-${timestamp}.${extension}`;
+
     document.body.appendChild(link);
     link.click();
     link.remove();
+
     URL.revokeObjectURL(url);
   }
+
+  // ------------------------------------------------------------
+  // CHAIN OF CUSTODY AND VERIFICATION
+  // ------------------------------------------------------------
+
   async function loadCustody() {
     const caseId = value('custody-case');
+
     const evidenceSelect = byId('verify-evidence');
     const reportSelect = byId('report-evidence');
 
@@ -1050,101 +1329,210 @@ function globalMessage(message, kind = 'neutral') {
       setText('custody-evidence-count', '0');
       setText('custody-events-count', '0');
       setText('custody-chain-status', '—');
-      renderRows('custody-evidence-body', [], [
-        { key: 'file_name' }, { key: 'evidence_id' }, { key: 'sha256' },
-        { key: 'acquired_at' }, { key: 'status' }
-      ], 'Select a case to view evidence.');
-      renderRows('custody-events-body', [], [
-        { key: 'timestamp' }, { key: 'actor' }, { key: 'action' },
-        { key: 'evidence_id' }, { key: 'details' }
-      ], 'Select a case to view custody history.');
+
+      renderRows(
+        'custody-evidence-body',
+        [],
+        [
+          { key: 'file_name' },
+          { key: 'evidence_id' },
+          { key: 'sha256' },
+          { key: 'acquired_at' },
+          { key: 'status' }
+        ],
+        'Select a case to view evidence.'
+      );
+
+      renderRows(
+        'custody-events-body',
+        [],
+        [
+          { key: 'timestamp' },
+          { key: 'actor' },
+          { key: 'action' },
+          { key: 'evidence_id' },
+          { key: 'details' }
+        ],
+        'Select a case to view custody history.'
+      );
+
       [evidenceSelect, reportSelect].forEach(select => {
         if (!select) return;
+
         select.replaceChildren();
+
         const option = document.createElement('option');
         option.value = '';
         option.textContent = 'Select evidence…';
+
         select.appendChild(option);
       });
+
       return;
     }
 
-    const data = await api(`/api/custody?case_id=${encodeURIComponent(caseId)}`);
-    const evidence = Array.isArray(data.evidence) ? data.evidence : [];
-    const events = Array.isArray(data.events) ? data.events :
-      (Array.isArray(data.records) ? data.records : []);
-    const integrity = data.integrity && typeof data.integrity === 'object'
-      ? data.integrity : {};
+    const data = await api(
+      `/api/custody?case_id=${encodeURIComponent(caseId)}`
+    );
+
+    const evidence = Array.isArray(data.evidence)
+      ? data.evidence
+      : [];
+
+    const events = Array.isArray(data.events)
+      ? data.events
+      : Array.isArray(data.records)
+        ? data.records
+        : [];
+
+    const integrity =
+      data.integrity && typeof data.integrity === 'object'
+        ? data.integrity
+        : {};
 
     setText('custody-evidence-count', evidence.length);
     setText('custody-events-count', events.length);
-    setText('custody-chain-status', integrity.valid === true ? 'VALID' :
-      integrity.valid === false ? 'CHECK FAILED' : 'UNKNOWN');
 
-    renderRows('custody-evidence-body', evidence, [
-      { key: 'file_name' },
-      { key: 'evidence_id', mono: true },
-      { key: 'sha256', mono: true },
-      { key: 'acquired_at', value: row => formatDate(row.acquired_at) },
-      { key: 'status' }
-    ], 'No evidence is registered in this case.');
+    setText(
+      'custody-chain-status',
+      integrity.valid === true
+        ? 'VALID'
+        : integrity.valid === false
+          ? 'CHECK FAILED'
+          : 'UNKNOWN'
+    );
 
-    renderRows('custody-events-body', events, [
-      { key: 'timestamp', value: row => formatDate(row.timestamp) },
-      { key: 'actor' },
-      { key: 'action' },
-      { key: 'evidence_id', mono: true },
-      { key: 'details', value: row => row.details ?? row.details_json ?? '' }
-    ], 'No custody events are recorded for this case.');
+    renderRows(
+      'custody-evidence-body',
+      evidence,
+      [
+        { key: 'file_name' },
+        { key: 'evidence_id', mono: true },
+        { key: 'sha256', mono: true },
+        {
+          key: 'acquired_at',
+          value: row => formatDate(row.acquired_at)
+        },
+        { key: 'status' }
+      ],
+      'No evidence is registered in this case.'
+    );
+
+    renderRows(
+      'custody-events-body',
+      events,
+      [
+        {
+          key: 'timestamp',
+          value: row => formatDate(row.timestamp)
+        },
+        { key: 'actor' },
+        { key: 'action' },
+        { key: 'evidence_id', mono: true },
+        {
+          key: 'details',
+          value: row => row.details ?? row.details_json ?? ''
+        }
+      ],
+      'No custody events are recorded for this case.'
+    );
 
     [evidenceSelect, reportSelect].forEach(select => {
       if (!select) return;
+
       const previous = select.value;
       select.replaceChildren();
+
       const placeholder = document.createElement('option');
       placeholder.value = '';
-      placeholder.textContent = evidence.length ? 'Select evidence…' : 'No evidence in this case';
+      placeholder.textContent = evidence.length
+        ? 'Select evidence…'
+        : 'No evidence in this case';
+
       select.appendChild(placeholder);
+
       evidence.forEach(item => {
         const option = document.createElement('option');
+
         option.value = item.evidence_id || '';
-        option.textContent = `${item.file_name || 'Evidence file'} · ${item.evidence_id || ''}`;
+        option.textContent =
+          `${item.file_name || 'Evidence file'} · ${item.evidence_id || ''}`;
+
         select.appendChild(option);
       });
-      select.value = evidence.some(item => item.evidence_id === previous) ? previous : '';
+
+      select.value = evidence.some(
+        item => item.evidence_id === previous
+      )
+        ? previous
+        : '';
     });
+
     clearMessage('verify-message');
     clearMessage('report-message');
   }
 
   async function verifyEvidence() {
     const evidenceId = value('verify-evidence');
-    const actor = actorFrom('custody-investigator', 'investigator-name');
+
     if (!evidenceId) {
-      showMessage('verify-message', 'Select an evidence item first.', 'error');
+      showMessage(
+        'verify-message',
+        'Select an evidence item first.',
+        'error'
+      );
       return;
     }
+
     const button = byId('verify-evidence-button');
+
     setBusy(button, true, 'Verifying…');
     clearMessage('verify-message');
+
     try {
       const result = await api('/api/verify', {
-        method: 'POST', body: { evidence_id: evidenceId, actor }
+        method: 'POST',
+        body: {
+          evidence_id: evidenceId,
+          actor: actorFrom(
+            'custody-investigator',
+            'investigator-name'
+          )
+        }
       });
-      const outcome = result.outcome && typeof result.outcome === 'object'
-        ? result.outcome : result;
-      const status = String(outcome.status || result.status || '').toUpperCase();
-      const verified = status === 'VERIFIED' || result.verified === true ||
-        result.valid === true || result.integrity_ok === true;
-      const message = outcome.message || result.message ||
-        (status === 'VERIFIED' ? 'SHA-256 verification passed: stored content matches the recorded hash.' :
-        status === 'MISMATCH' ? 'Integrity check failed: the stored file does not match its recorded SHA-256 hash.' :
-        status === 'MISSING' ? 'Integrity check failed: the stored evidence file is missing.' :
-        `Verification result: ${status || 'UNKNOWN'}.`);
-      showMessage('verify-message', message, verified ? 'success' : 'error');
+
+      const outcome =
+        result.outcome && typeof result.outcome === 'object'
+          ? result.outcome
+          : result;
+
+      const status = String(
+        outcome.status || result.status || ''
+      ).toUpperCase();
+
+      const verified =
+        result.verified === true ||
+        result.valid === true ||
+        result.integrity_ok === true;
+
+      const message =
+        outcome.message ||
+        result.message ||
+        (
+          verified
+            ? 'Evidence verification passed.'
+            : `Verification result: ${status || 'NOT VERIFIED'}. Review the result.`
+        );
+
+      showMessage(
+        'verify-message',
+        message,
+        verified ? 'success' : 'error'
+      );
+
       await loadCustody();
     } catch (error) {
-      showMessage('verify-message', error.message || String(error), 'error');
+      showMessage('verify-message', error.message, 'error');
     } finally {
       setBusy(button, false);
     }
@@ -1163,6 +1551,7 @@ function globalMessage(message, kind = 'neutral') {
     }
 
     const button = byId('verify-custody-button');
+
     setBusy(button, true, 'Checking…');
     clearMessage('custody-verification-message');
 
@@ -1172,20 +1561,26 @@ function globalMessage(message, kind = 'neutral') {
         body: {
           case_id: caseId,
           verify_custody: true,
-          actor: actorFrom('custody-investigator', 'investigator-name')
+          actor: actorFrom(
+            'custody-investigator',
+            'investigator-name'
+          )
         }
       });
 
-      const verified = Boolean(
-        result.verified ?? result.valid ?? result.integrity_ok
-      );
+      const verified =
+        result.verified === true ||
+        result.valid === true ||
+        result.integrity_ok === true;
 
       showMessage(
         'custody-verification-message',
         result.message ||
-          (verified
-            ? 'Custody verification passed.'
-            : 'Custody verification did not pass. Review the returned result.'),
+          (
+            verified
+              ? 'Custody verification passed.'
+              : 'Custody verification did not pass. Review the returned result.'
+          ),
         verified ? 'success' : 'error'
       );
 
@@ -1201,15 +1596,24 @@ function globalMessage(message, kind = 'neutral') {
     }
   }
 
+  // ------------------------------------------------------------
+  // REPORTS
+  // ------------------------------------------------------------
+
   async function generateCaseReport() {
     const caseId = value('custody-case');
 
     if (!caseId) {
-      showMessage('report-message', 'Select a case first.', 'error');
+      showMessage(
+        'report-message',
+        'Select a case first.',
+        'error'
+      );
       return;
     }
 
     const button = byId('generate-case-report');
+
     setBusy(button, true, 'Generating…');
     clearMessage('report-message');
 
@@ -1218,16 +1622,17 @@ function globalMessage(message, kind = 'neutral') {
         method: 'POST',
         body: {
           case_id: caseId,
-          actor: actorFrom('custody-investigator', 'investigator-name')
+          actor: actorFrom(
+            'custody-investigator',
+            'investigator-name'
+          )
         }
       });
 
       showMessage(
         'report-message',
         result.message ||
-          result.filename ||
-          result.path ||
-          'Case report generated.',
+          `Case report generated: ${result.filename || 'PDF report'}.`,
         'success'
       );
 
@@ -1254,6 +1659,7 @@ function globalMessage(message, kind = 'neutral') {
     }
 
     const button = byId('generate-evidence-report');
+
     setBusy(button, true, 'Generating…');
     clearMessage('report-message');
 
@@ -1262,16 +1668,17 @@ function globalMessage(message, kind = 'neutral') {
         method: 'POST',
         body: {
           evidence_id: evidenceId,
-          actor: actorFrom('custody-investigator', 'investigator-name')
+          actor: actorFrom(
+            'custody-investigator',
+            'investigator-name'
+          )
         }
       });
 
       showMessage(
         'report-message',
         result.message ||
-          result.filename ||
-          result.path ||
-          'Evidence report generated.',
+          `Evidence report generated: ${result.filename || 'PDF report'}.`,
         'success'
       );
 
@@ -1284,30 +1691,97 @@ function globalMessage(message, kind = 'neutral') {
       setBusy(button, false);
     }
   }
-    async function scanRecovery() {
-    const caseId = value('recovery-case');
-    const source = value('recovery-source');
 
-    if (!caseId || !source) {
+  // ------------------------------------------------------------
+  // FILE RECOVERY
+  // ------------------------------------------------------------
+
+  function renderRecoveryCandidates(candidates) {
+    renderRows(
+      'recovery-candidates-body',
+      candidates,
+      [
+        {
+          key: 'file_name',
+          value: row =>
+            row.file_name ||
+            row.name ||
+            row.candidate_id ||
+            'Recovered candidate'
+        },
+        {
+          key: 'file_type',
+          value: row => row.file_type || row.type || 'Unknown'
+        },
+        {
+          key: 'size_bytes',
+          value: row => formatBytes(
+            row.size_bytes ?? row.size
+          )
+        },
+        {
+          key: 'status',
+          value: row => row.status || 'Found'
+        },
+        {
+          key: 'candidate_id',
+          value: row =>
+            row.candidate_id ||
+            row.recovery_id ||
+            row.id ||
+            '—'
+        }
+      ],
+      'No recovery candidates found. Select an image and run a scan.'
+    );
+  }
+
+  function clearRecoveryForNewCase() {
+    state.recoveryCandidates = [];
+    state.recoverySource = '';
+    renderRecoveryCandidates([]);
+  }
+
+  async function scanRecovery() {
+    const caseId = value('recovery-case');
+    const file = byId('recovery-image')?.files?.[0];
+
+    if (!caseId) {
       showMessage(
         'recovery-message',
-        'Select a case and provide the recovery source path.',
+        'Select a case first.',
+        'error'
+      );
+      return;
+    }
+
+    if (!file) {
+      showMessage(
+        'recovery-message',
+        'Choose a disk image or source file before starting the recovery scan.',
         'error'
       );
       return;
     }
 
     const button = byId('scan-recovery');
+
     setBusy(button, true, 'Scanning…');
     clearMessage('recovery-message');
 
     try {
+      const dataBase64 = await fileToBase64(file);
+
       const result = await api('/api/recovery/scan', {
         method: 'POST',
         body: {
           case_id: caseId,
-          source_path: source,
-          actor: actorFrom('recovery-investigator', 'investigator-name')
+          name: file.name,
+          data_base64: dataBase64,
+          actor: actorFrom(
+            'recovery-investigator',
+            'investigator-name'
+          )
         }
       });
 
@@ -1315,47 +1789,52 @@ function globalMessage(message, kind = 'neutral') {
         ? result.candidates
         : [];
 
-      state.recoverySource = result.source_path || source;
+      state.recoverySource = result.source_path || '';
 
-      renderRows(
-        'recovery-results-body',
-        state.recoveryCandidates,
-        [
-          { key: 'file_name', value: row => row.file_name || row.candidate_id || 'Unknown candidate' },
-          { key: 'offset', mono: true },
-          { key: 'size_bytes', value: row => formatBytes(row.size_bytes) },
-          { key: 'file_type' },
-          { key: 'status' }
-        ],
-        'No recoverable file candidates were found.'
-      );
+      renderRecoveryCandidates(state.recoveryCandidates);
 
       showMessage(
         'recovery-message',
         result.message ||
-          `Scan completed. ${state.recoveryCandidates.length} candidate(s) found.`,
+          `Recovery scan completed. ${state.recoveryCandidates.length} candidate(s) found.`,
         'success'
       );
+
+      await loadDashboard();
     } catch (error) {
-      showMessage('recovery-message', error.message, 'error');
+      showMessage(
+        'recovery-message',
+        error.message,
+        'error'
+      );
     } finally {
       setBusy(button, false);
     }
   }
 
-  async function registerRecoveredFiles() {
+  async function registerRecovery() {
     const caseId = value('recovery-case');
 
-    if (!caseId || !state.recoveryCandidates.length) {
+    if (!caseId) {
       showMessage(
         'recovery-message',
-        'Run a recovery scan and select a case first.',
+        'Select a case first.',
         'error'
       );
       return;
     }
 
-    const button = byId('register-recovered');
+    if (!state.recoveryCandidates.length) {
+      showMessage(
+        'recovery-message',
+        'Run a recovery scan before registering candidates.',
+        'error'
+      );
+      return;
+    }
+
+    const button = byId('register-recovery');
+
     setBusy(button, true, 'Registering…');
 
     try {
@@ -1365,30 +1844,51 @@ function globalMessage(message, kind = 'neutral') {
           case_id: caseId,
           source_path: state.recoverySource,
           candidates: state.recoveryCandidates,
-          actor: actorFrom('recovery-investigator', 'investigator-name')
+          actor: actorFrom(
+            'recovery-investigator',
+            'investigator-name'
+          )
         }
       });
 
       showMessage(
         'recovery-message',
         result.message ||
-          `Recovery registration completed: ${result.registered ?? 0} item(s).`,
+          `Recovery registration completed: ${result.registered ?? result.successful ?? 0} item(s).`,
         'success'
       );
 
-      await loadEvidence(caseId);
+      state.recoveryCandidates = [];
+      state.recoverySource = '';
+
+      renderRecoveryCandidates([]);
+
+      await refreshAcquiredEvidence();
       await loadDashboard();
     } catch (error) {
-      showMessage('recovery-message', error.message, 'error');
+      showMessage(
+        'recovery-message',
+        error.message,
+        'error'
+      );
     } finally {
       setBusy(button, false);
     }
   }
 
+  // ------------------------------------------------------------
+  // SYSTEM CHECKS AND DEVICES
+  // ------------------------------------------------------------
+
   async function loadSystemChecks() {
     const button = byId('run-system-checks');
+    const container = byId('system-checks-list');
 
-    if (button) setBusy(button, true, 'Checking…');
+    setBusy(button, true, 'Checking…');
+
+    if (container) {
+      container.textContent = 'Running system checks…';
+    }
 
     try {
       const result = await api('/api/system-checks');
@@ -1397,178 +1897,267 @@ function globalMessage(message, kind = 'neutral') {
         ? result.checks
         : [];
 
+      if (container) {
+        container.replaceChildren();
+
+        if (!checks.length) {
+          container.textContent =
+            'No system check results are available.';
+        } else {
+          checks.forEach(check => {
+            const item = document.createElement('div');
+            item.className = 'system-check-item';
+
+            const title = document.createElement('strong');
+            title.textContent =
+              check.Check ||
+              check.check ||
+              check.name ||
+              'System check';
+
+            const status = document.createElement('span');
+            status.textContent =
+              check.Status ||
+              check.status ||
+              check.Result ||
+              check.result ||
+              'Unknown';
+
+            const detail = document.createElement('small');
+            detail.textContent =
+              check.Details ||
+              check.details ||
+              check.message ||
+              '';
+
+            item.append(title, status, detail);
+            container.appendChild(item);
+          });
+        }
+      }
+
       renderRows(
         'system-checks-body',
         checks,
         [
-          { key: 'Check', value: row => row.Check ?? row.check ?? row.name ?? '—' },
           {
-            key: 'Result',
-            value: row => {
-              const status = row.Status ?? row.status ?? row.result ?? '—';
-              const severity = row.Severity ?? row.severity;
-              const details = row.Details ?? row.details;
-              const parts = [String(status)];
-              if (severity) parts.push(`Severity: ${severity}`);
-              if (details) parts.push(String(details));
-              return parts.join(' — ');
-            }
+            key: 'check',
+            value: row =>
+              row.Check || row.check || row.name || '—'
+          },
+          {
+            key: 'result',
+            value: row =>
+              row.Status ||
+              row.status ||
+              row.Result ||
+              row.result ||
+              '—'
+          },
+          {
+            key: 'details',
+            value: row =>
+              row.Details ||
+              row.details ||
+              row.message ||
+              ''
           }
         ],
         'No system-check results are available.'
       );
 
-      const summary = `${checks.length} system check(s) completed.`;
-      if (byId('global-message')) {
-        globalMessage(result.message || summary, 'success');
-      }
-    } catch (error) {
-      showMessage('system-checks-message', error.message, 'error');
-    } finally {
-      if (button) setBusy(button, false);
-    }
-  }
-
-  async function loadDeviceStatus() {
-    try {
-      const result = await api('/api/devices');
-      state.devices = Array.isArray(result.devices) ? result.devices : [];
-
-      setText(
-        'system-device-count',
-        String(state.devices.length)
+      showMessage(
+        'system-message',
+        `${checks.length} system check(s) completed.`,
+        'success'
       );
     } catch (error) {
-      setText('system-device-count', 'Unavailable');
-    }
-  }
-
-
-async function refreshPage(page) {
-  switch (page) {
-    case 'dashboard':
-      await Promise.all([loadDashboard(), loadCases()]);
-      break;
-
-    case 'cases':
-      await loadCases();
-      break;
-
-    case 'acquire':
-      await loadCases();
-      await refreshAcquiredEvidence();
-      break;
-
-    case 'analysis':
-      await loadCases();
-      await loadAnalysis();
-      break;
-
-    case 'custody':
-      await loadCases();
-      await loadCustody();
-      break;
-
-    case 'recovery':
-      await loadCases();
-      break;
-
-    case 'system':
-      await Promise.all([loadSystemChecks(), loadDeviceStatus()]);
-      break;
-
-    default:
-      break;
-  }
-}
-
-
-  function showError(error, target = 'global-message') {
-    const message = error instanceof Error
-      ? error.message
-      : String(error || 'An unexpected error occurred.');
-
-    if (target === 'global-message') {
-      globalMessage(message, 'error');
-    } else {
-      showMessage(target, message, 'error');
-    }
-  }
-
-  
-async function checkConnection() {
-  const status = byId('connection-label');
-  const dot = byId('connection-dot');
-
-  function updateStatus(connected) {
-    if (status) {
-      status.textContent = connected
-        ? 'Connected to local service'
-        : 'Local service disconnected';
-    }
-
-    if (dot) {
-      dot.classList.toggle('status-success', connected);
-      dot.classList.toggle('status-error', !connected);
-    }
-  }
-
-  try {
-    const result = await api('/api/health');
-
-    const connected = Boolean(result && result.ok === true);
-    updateStatus(connected);
-    return connected;
-  } catch (error) {
-    updateStatus(false);
-    console.error('DataLens connection check failed:', error);
-    return false;
-  }
-}
-
-  
-  async function createBackup() {
-    const button = $$('button').find(item =>
-      item.textContent.trim().toLowerCase().includes('create backup')
-    );
-    if (button) setBusy(button, true, 'Creating backup…');
-    clearGlobalMessage();
-    try {
-      const result = await api('/api/backup', { method: 'POST', body: {} });
-      if (!result || result.ok !== true || !result.download_url) {
-        throw new Error(result?.error || 'The server did not return a backup download link.');
+      if (container) {
+        container.textContent =
+          `System checks failed: ${error.message}`;
       }
-      downloadReport(result.download_url);
-      globalMessage(`${result.message || 'Backup created.'} File: ${result.filename}`, 'success');
-    } catch (error) {
-      globalMessage(`Backup failed: ${error.message}`, 'error');
+
+      showMessage('system-message', error.message, 'error');
     } finally {
-      if (button) setBusy(button, false);
+      setBusy(button, false);
     }
   }
 
-    function bindEvents() {
-    // The current HTML exposes this action by its visible label rather than a stable ID.
-    const backupButton = $$('button').find(button =>
-      button.textContent.trim().toLowerCase().includes('create backup')
-    );
-    if (backupButton) {
-      backupButton.disabled = false;
-      backupButton.removeAttribute('aria-disabled');
-      backupButton.title = 'Create and download a local DataLens backup ZIP';
-      backupButton.addEventListener('click', event => {
-        event.preventDefault();
-        createBackup();
-      });
+  async function refreshSystemDevices() {
+    const body = byId('system-devices-body');
+
+    try {
+      const data = await api('/api/devices');
+
+      const devices = Array.isArray(data.devices)
+        ? data.devices
+        : [];
+
+      state.devices = devices;
+
+      setText('system-device-count', devices.length);
+
+      renderRows(
+        'system-devices-body',
+        devices,
+        [
+          {
+            key: 'name',
+            value: row =>
+              row.name || row.model || row.device || 'Unknown'
+          },
+          {
+            key: 'mountpoint',
+            value: row =>
+              row.mountpoint ||
+              row.mount_point ||
+              row.path ||
+              row.drive_letter ||
+              '—'
+          },
+          {
+            key: 'filesystem',
+            value: row =>
+              row.filesystem || row.fstype || 'Unknown'
+          },
+          {
+            key: 'size_bytes',
+            value: row =>
+              formatBytes(row.size_bytes ?? row.size)
+          }
+        ],
+        'No devices detected.'
+      );
+
+      return devices;
+    } catch (error) {
+      setText('system-device-count', 'Unavailable');
+
+      if (body) {
+        renderRows(
+          'system-devices-body',
+          [],
+          [
+            { key: 'name' },
+            { key: 'mountpoint' },
+            { key: 'filesystem' },
+            { key: 'size_bytes' }
+          ],
+          `Could not load devices: ${error.message}`
+        );
+      }
+
+      showMessage('system-message', error.message, 'error');
+      return [];
     }
+  }
+
+  // ------------------------------------------------------------
+  // BACKUP
+  // ------------------------------------------------------------
+
+  async function createBackup() {
+    const button = byId('create-backup');
+
+    setBusy(button, true, 'Creating backup…');
+    clearMessage('backup-message');
+
+    try {
+      const result = await api('/api/backup', {
+        method: 'POST',
+        body: {
+          actor: actorFrom('investigator-name')
+        }
+      });
+
+      if (!result.download_url) {
+        throw new Error(
+          'The server did not return a backup download link.'
+        );
+      }
+
+      showMessage(
+        'backup-message',
+        `${result.message || 'Backup created successfully.'} ${result.filename || ''}`,
+        'success'
+      );
+
+      downloadReport(result.download_url);
+    } catch (error) {
+      showMessage(
+        'backup-message',
+        `Backup failed: ${error.message}`,
+        'error'
+      );
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  // ------------------------------------------------------------
+  // SERVER CONNECTION
+  // ------------------------------------------------------------
+
+  async function checkConnection() {
+    const status = byId('connection-label');
+    const dot = byId('connection-dot');
+
+    function updateStatus(connected) {
+      if (status) {
+        status.textContent = connected
+          ? 'Connected to local service'
+          : 'Local service disconnected';
+      }
+
+      if (dot) {
+        dot.classList.toggle('status-success', connected);
+        dot.classList.toggle('status-error', !connected);
+      }
+    }
+
+    try {
+      const result = await api('/api/health');
+      const connected = Boolean(result && result.ok === true);
+
+      updateStatus(connected);
+      return connected;
+    } catch (error) {
+      updateStatus(false);
+      console.error(
+        'DataLens connection check failed:',
+        error
+      );
+
+      return false;
+    }
+  }
+
+  // ------------------------------------------------------------
+  // EVENT BINDINGS
+  // ------------------------------------------------------------
+
+  function bindEvents() {
+    // Navigation buttons
     $$('[data-page]').forEach(button => {
       button.addEventListener('click', () => {
         navigate(button.dataset.page);
       });
+      // Handle dashboard shortcuts such as New Case and View Cases.
+    $$('[data-go-page]').forEach(button => {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        navigate(button.dataset.goPage);
+      });
+    });
     });
 
-    byId('create-case-form')?.addEventListener('submit', createCase);
+    // Case creation
+    byId('create-case-form')?.addEventListener(
+      'submit',
+      createCase
+    );
 
+    // Case selectors
     [
       'selected-case',
       'acquire-case',
@@ -1576,90 +2165,144 @@ async function checkConnection() {
       'custody-case',
       'recovery-case'
     ].forEach(id => {
-      byId(id)?.addEventListener('change', async () => {
-        if (id === 'selected-case') {
-          localStorage.setItem('datalens-selected-case', value(id));
-        }
-
-        if (id === 'acquire-case') {
-          updateAcquireButton();
-          await refreshAcquiredEvidence().catch(error => {
-            showError(error, 'upload-message');
-          });
-        }
-
-        if (id === 'analysis-case') {
-          await loadAnalysis().catch(error => {
-            showError(error, 'analysis-message');
-          });
-        }
-
-        if (id === 'custody-case') {
-          await loadCustody().catch(error => {
-            showError(error, 'verify-message');
-          });
-        }
+      byId(id)?.addEventListener('change', () => {
+        syncCaseSelection(id);
       });
     });
 
-    byId('detect-devices')?.addEventListener('click', detectDevices);
-    byId('acquire-device')?.addEventListener('click', acquireDevice);
+    // Device detection and acquisition
+    byId('detect-devices')?.addEventListener(
+      'click',
+      detectDevices
+    );
 
-    byId('device-authorized')?.addEventListener('change', updateAcquireButton);
+    // Support the alternate button ID if used in the HTML.
+    byId('inspect-devices')?.addEventListener(
+      'click',
+      refreshSystemDevices
+    );
 
-    byId('evidence-files')?.addEventListener('change', renderUploadList);
+    byId('acquire-device')?.addEventListener(
+      'click',
+      acquireDevice
+    );
 
-    byId('upload-evidence-form')?.addEventListener('submit', uploadEvidence);
+    byId('device-authorized')?.addEventListener(
+      'change',
+      updateAcquireButton
+    );
 
-    byId('run-analysis')?.addEventListener('click', runAnalysis);
+    // File upload
+    byId('evidence-files')?.addEventListener(
+      'change',
+      renderUploadList
+    );
 
-    byId('export-analysis-csv')?.addEventListener('click', () => {
-      exportAnalysis('csv');
-    });
+    byId('upload-evidence-form')?.addEventListener(
+      'submit',
+      uploadEvidence
+    );
 
-    byId('export-analysis-json')?.addEventListener('click', () => {
-      exportAnalysis('json');
-    });
+    // Analysis
+    byId('run-analysis')?.addEventListener(
+      'click',
+      runAnalysis
+    );
 
-    byId('verify-evidence-button')?.addEventListener('click', verifyEvidence);
-    byId('refresh-custody')?.addEventListener('click', () => loadCustody().catch(error => showMessage('verify-message', error.message, 'error')));
+    byId('export-analysis-csv')?.addEventListener(
+      'click',
+      () => exportAnalysis('csv')
+    );
 
-    byId('verify-custody-button')?.addEventListener('click', verifyCustody);
+    byId('export-analysis-json')?.addEventListener(
+      'click',
+      () => exportAnalysis('json')
+    );
 
-    byId('generate-case-report')?.addEventListener('click', generateCaseReport);
+    // Evidence verification
+    byId('verify-evidence-button')?.addEventListener(
+      'click',
+      verifyEvidence
+    );
 
-    byId('generate-evidence-report')?.addEventListener('click', generateEvidenceReport);
+    byId('verify-custody-button')?.addEventListener(
+      'click',
+      verifyCustody
+    );
 
-    byId('scan-recovery')?.addEventListener('click', scanRecovery);
+    byId('refresh-custody')?.addEventListener(
+      'click',
+      () => loadCustody().catch(error => {
+        showMessage('verify-message', error.message, 'error');
+      })
+    );
 
-    byId('register-recovered')?.addEventListener('click', registerRecoveredFiles);
+    // Reports
+    byId('generate-case-report')?.addEventListener(
+      'click',
+      generateCaseReport
+    );
 
-    byId('run-system-checks')?.addEventListener('click', loadSystemChecks);
+    byId('generate-evidence-report')?.addEventListener(
+      'click',
+      generateEvidenceReport
+    );
 
-    // Mobile navigation menu
+    // Recovery
+    byId('scan-recovery')?.addEventListener(
+      'click',
+      scanRecovery
+    );
+
+    byId('register-recovery')?.addEventListener(
+      'click',
+      registerRecovery
+    );
+
+    // System checks
+    byId('run-system-checks')?.addEventListener(
+      'click',
+      loadSystemChecks
+    );
+
+    // Backup
+    byId('create-backup')?.addEventListener(
+      'click',
+      createBackup
+    );
+
+    // Mobile menu
     const menuButton = byId('mobile-menu-button');
     const sidebar = byId('sidebar');
 
     function closeMobileMenu() {
-      if (sidebar) sidebar.classList.remove('sidebar-open');
+      sidebar?.classList.remove('sidebar-open');
       document.body.classList.remove('sidebar-menu-open');
 
-      if (menuButton) {
-        menuButton.setAttribute('aria-expanded', 'false');
-      }
+      menuButton?.setAttribute('aria-expanded', 'false');
     }
 
     menuButton?.addEventListener('click', event => {
       event.preventDefault();
 
-      const open = sidebar?.classList.toggle('sidebar-open') || false;
+      const open =
+        sidebar?.classList.toggle('sidebar-open') || false;
 
-      document.body.classList.toggle('sidebar-menu-open', open);
-      menuButton.setAttribute('aria-expanded', String(open));
+      document.body.classList.toggle(
+        'sidebar-menu-open',
+        open
+      );
+
+      menuButton.setAttribute(
+        'aria-expanded',
+        String(open)
+      );
     });
 
     document.addEventListener('click', event => {
-      if (!sidebar?.classList.contains('sidebar-open')) return;
+      if (!sidebar?.classList.contains('sidebar-open')) {
+        return;
+      }
 
       if (
         sidebar.contains(event.target) ||
@@ -1672,23 +2315,31 @@ async function checkConnection() {
     });
 
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') closeMobileMenu();
+      if (event.key === 'Escape') {
+        closeMobileMenu();
+      }
     });
   }
+
+  // ------------------------------------------------------------
+  // APPLICATION STARTUP
+  // ------------------------------------------------------------
 
   document.addEventListener('DOMContentLoaded', async () => {
     try {
       bindEvents();
 
-      const investigator = localStorage.getItem('datalens-investigator');
+      const savedInvestigator = localStorage.getItem(
+        'datalens-investigator'
+      );
 
-      if (investigator) {
-        const input = byId('investigator-name');
+      const investigatorInput = byId('investigator-name');
 
-        if (input) input.value = investigator;
+      if (investigatorInput && savedInvestigator) {
+        investigatorInput.value = savedInvestigator;
       }
 
-      byId('investigator-name')?.addEventListener('change', event => {
+      investigatorInput?.addEventListener('change', event => {
         localStorage.setItem(
           'datalens-investigator',
           event.target.value.trim()
@@ -1697,16 +2348,22 @@ async function checkConnection() {
 
       await checkConnection();
 
-      const initialPage = location.hash.replace('#', '');
+      const requestedPage = location.hash.replace('#', '');
 
       navigate(
-        pageNames[initialPage] ? initialPage : 'dashboard',
+        pageNames[requestedPage]
+          ? requestedPage
+          : 'dashboard',
         false
       );
 
       await loadCases();
+      await loadDashboard();
+
     } catch (error) {
-      showError(error);
+      console.error('DataLens startup error:', error);
+      globalMessage(error.message, 'error');
     }
   });
+
 })();

@@ -890,3 +890,6 @@ textarea.form-control {
     min-width: 620px;
   }
 }
+#selected-case-summary {
+    display: none !important;
+}
