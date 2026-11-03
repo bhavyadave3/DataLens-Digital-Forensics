@@ -1182,28 +1182,102 @@
   }
 
   async function loadAnalysis() {
-    const caseId = value('analysis-case');
+  const caseId = value('analysis-case');
 
-    if (!caseId) {
-      state.analysisRows = [];
-      state.analysisCase = '';
-      renderAnalysisResults([]);
-      return;
-    }
+  if (!caseId) {
+    state.analysisRows = [];
+    state.analysisCase = '';
+    renderAnalysisResults([]);
+    return;
+  }
 
-    const data = await api(
-      `/api/analysis?case_id=${encodeURIComponent(caseId)}`
+  try {
+    // Fetch saved analyses and evidence metadata together.
+    const [data, evidence] = await Promise.all([
+      api(`/api/analysis?case_id=${encodeURIComponent(caseId)}`),
+      loadEvidence(caseId)
+    ]);
+
+    const evidenceById = new Map(
+      evidence.map(item => [item.evidence_id, item])
     );
 
-    state.analysisRows = Array.isArray(data.results)
-      ? data.results
-      : [];
+    // The API stores analysis fields inside result.findings.
+    // Convert them into the flat structure expected by the table.
+    state.analysisRows = (Array.isArray(data.results) ? data.results : [])
+      .map(result => {
+        const findings =
+          result.findings && typeof result.findings === 'object'
+            ? result.findings
+            : {};
+
+        const aiModels = findings.ai_models || {};
+        const randomForest = aiModels.random_forest || {};
+        const isolationForest = aiModels.isolation_forest || {};
+
+        const evidenceRecord =
+          evidenceById.get(result.evidence_id) || {};
+
+        return {
+          ...result,
+
+          file_name:
+            evidenceRecord.file_name ||
+            result.file_name ||
+            'Unknown file',
+
+          severity:
+            findings.severity ??
+            findings.risk_level ??
+            'Not available',
+
+          risk_level:
+            findings.severity ??
+            findings.risk_level ??
+            'Not available',
+
+          risk_score:
+            findings.risk_score ??
+            'Not available',
+
+          random_forest_prediction:
+            randomForest.prediction ??
+            'Not available',
+
+          confidence:
+            typeof randomForest.confidence === 'number'
+              ? `${(randomForest.confidence * 100).toFixed(1)}%`
+              : 'N/A',
+
+          anomaly_result:
+            isolationForest.result ??
+            'Not available',
+
+          anomaly_score:
+            isolationForest.decision_score ??
+            'N/A',
+
+          findings
+        };
+      });
 
     state.analysisCase = caseId;
 
     renderAnalysisResults(state.analysisRows);
-  }
 
+  } catch (error) {
+    state.analysisRows = [];
+    renderAnalysisResults([]);
+
+    showMessage(
+      'analysis-message',
+      `Could not load analysis results: ${error.message}`,
+      'error'
+    );
+
+    throw error;
+  }
+}
   async function runAnalysis() {
     const caseId = value('analysis-case');
 
