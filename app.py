@@ -1,12 +1,11 @@
 
 from __future__ import annotations
 
-"""DataLens multi-user API server.
+"""DataLens forensic API server (authentication disabled).
 
 The forensic engine remains in evidence_manager.py, forensics.py and recovery.py.
-Authentication and authorization are enforced here before any case-scoped action.
-On Render, mount a persistent disk at the existing DATA_DIR path described in the
-setup instructions. Never expose this service without configuring its secrets.
+This build allows unauthenticated access to the forensic API. Do not use it with
+real or confidential evidence on a public internet-facing deployment.
 """
 
 import base64
@@ -27,7 +26,6 @@ from urllib.parse import parse_qs, urlparse
 import evidence_manager as em
 import forensics
 import recovery
-import auth_manager as auth
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(getattr(em, "DATA_DIR", BASE_DIR / "datalens_data")).resolve()
@@ -70,12 +68,35 @@ FRONTEND_FILES = {
     ),
 }
 
-# Initialize the existing forensic database first, then add auth and owner columns.
+# Initialize only the existing forensic database. No auth secrets or auth schema
+# are required by this build.
 em.initialize_database()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 RECOVERY_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-auth.initialize_auth_schema()
+
+
+PUBLIC_USER = {
+    "user_id": "public",
+    "username": "public",
+    "display_name": "DataLens Investigator",
+    "role": "admin",
+}
+
+
+def _all_cases():
+    """Return every case from the existing DataLens cases table."""
+    with sqlite3.connect(str(em.DB_PATH), timeout=30) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT * FROM cases ORDER BY rowid DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _assign_case_owner_noop(case_id: str, owner_id: str):
+    # Ownership is not used when authentication is disabled.
+    return None
 
 
 def _json_default(value):
@@ -191,7 +212,8 @@ def _decode_upload(item: dict):
 
 
 def _case_visible(user: dict, case_id: str) -> bool:
-    return bool(case_id) and auth.case_is_accessible(user, case_id)
+    # All cases are visible in this unauthenticated single-user build.
+    return bool(case_id) and em.get_case(case_id) is not None
 
 
 def _evidence_visible(user: dict, evidence_id: str):
@@ -207,7 +229,7 @@ def _evidence_visible(user: dict, evidence_id: str):
 
 
 def _visible_evidence_and_analysis(user: dict):
-    cases = auth.visible_cases(user)
+    cases = _all_cases()
     evidence = []
     analysis_count = 0
 
@@ -348,9 +370,7 @@ class DataLensHandler(BaseHTTPRequestHandler):
         }
 
     def _authenticated_user(self):
-        return auth.authenticate_header(
-            self.headers.get("Authorization")
-        )
+        return PUBLIC_USER.copy()
 
     def _require_user(self):
         user = self._authenticated_user()
@@ -365,13 +385,7 @@ class DataLensHandler(BaseHTTPRequestHandler):
         return user
 
     def _require_admin(self, user: dict) -> bool:
-        if user.get("role") != "admin":
-            self._send_json(
-                403,
-                {"error": "Administrator access is required."},
-            )
-            return False
-
+        # There are no individual roles in the unauthenticated build.
         return True
 
     def _require_case(self, user: dict, case_id: str):
@@ -439,7 +453,7 @@ class DataLensHandler(BaseHTTPRequestHandler):
                 "time": datetime.now().astimezone().isoformat(
                     timespec="seconds"
                 ),
-                "authentication_required": True,
+                "authentication_required": False,
             })
             return
 
@@ -453,13 +467,9 @@ class DataLensHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"user": user})
 
             elif path == "/api/admin/users":
-                if not self._require_admin(user):
-                    return
-
-                self._send_json(
-                    200,
-                    {"users": auth.list_users()},
-                )
+                self._send_json(410, {
+                    "error": "User management is unavailable because authentication is disabled."
+                })
 
             elif path == "/api/dashboard":
                 self._send_json(
@@ -470,7 +480,7 @@ class DataLensHandler(BaseHTTPRequestHandler):
             elif path == "/api/cases":
                 self._send_json(
                     200,
-                    {"cases": auth.visible_cases(user)},
+                    {"cases": _all_cases()},
                 )
 
             elif path == "/api/evidence":
@@ -553,29 +563,17 @@ class DataLensHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
 
-            # Login is the only unauthenticated data API action.
-            if path == "/api/auth/login":
-                try:
-                    remote_ip = (
-                        self.client_address[0]
-                        if self.client_address
-                        else "unknown"
-                    )
+            # Authentication endpoints are intentionally inactive in this build.
+            if path.startswith("/api/auth/"):
+                self._send_json(410, {
+                    "error": "Authentication is disabled in this DataLens build."
+                })
+                return
 
-                    result = auth.login(
-                        str(payload.get("username", "")),
-                        str(payload.get("password", "")),
-                        remote_ip=remote_ip,
-                    )
-
-                except PermissionError as exc:
-                    self._send_json(
-                        401,
-                        {"error": str(exc)},
-                    )
-                    return
-
-                self._send_json(200, result)
+            if path.startswith("/api/admin/"):
+                self._send_json(410, {
+                    "error": "Administrator account management is unavailable because authentication is disabled."
+                })
                 return
 
             user = self._require_user()
@@ -594,53 +592,32 @@ class DataLensHandler(BaseHTTPRequestHandler):
                 })
 
             elif path == "/api/auth/change-password":
-                auth.change_password(
-                    user["user_id"],
-                    str(payload.get("current_password", "")),
-                    str(payload.get("new_password", "")),
-                )
-
-                self._send_json(200, {
-                    "ok": True,
-                    "message": "Password updated. Sign in again on other devices.",
+                self._send_json(410, {
+                    "error": "Authentication is disabled."
                 })
 
             elif path == "/api/admin/users":
                 if not self._require_admin(user):
                     return
 
-                created = auth.create_user(
-                    username=payload.get("username", ""),
-                    display_name=payload.get("display_name", ""),
-                    password=payload.get("password", ""),
-                    role="investigator",
-                )
-
-                self._send_json(201, {"user": created})
+                self._send_json(410, {
+                    "error": "User management is disabled."
+                })
 
             elif path == "/api/admin/users/active":
                 if not self._require_admin(user):
                     return
 
-                updated = auth.set_user_active(
-                    str(payload.get("user_id", "")),
-                    bool(payload.get("is_active")),
-                )
-
-                self._send_json(200, {"user": updated})
+                self._send_json(410, {
+                    "error": "User management is disabled."
+                })
 
             elif path == "/api/admin/users/password":
                 if not self._require_admin(user):
                     return
 
-                auth.admin_reset_password(
-                    str(payload.get("user_id", "")),
-                    str(payload.get("new_password", "")),
-                )
-
-                self._send_json(200, {
-                    "ok": True,
-                    "message": "Password reset. The investigator must sign in again.",
+                self._send_json(410, {
+                    "error": "User management is disabled."
                 })
 
             elif path == "/api/admin/cases/assign":
@@ -657,7 +634,7 @@ class DataLensHandler(BaseHTTPRequestHandler):
                     )
                     return
 
-                auth.assign_case_owner(case_id, owner_id)
+                _assign_case_owner_noop(case_id, owner_id)
 
                 em.add_custody_event(
                     case_id=case_id,
@@ -689,7 +666,7 @@ class DataLensHandler(BaseHTTPRequestHandler):
                     str(payload.get("description", "")),
                 )
 
-                auth.assign_case_owner(
+                _assign_case_owner_noop(
                     created["case_id"],
                     user["user_id"],
                 )
@@ -1385,9 +1362,8 @@ class DataLensHandler(BaseHTTPRequestHandler):
 
             os.replace(staged_db, db_path)
 
-            # Recreate indexes/auth migrations and attach legacy records to the admin.
+            # Reinitialize only the forensic database.
             em.initialize_database()
-            auth.initialize_auth_schema()
 
             return restored_count
 
@@ -1539,10 +1515,10 @@ def main():
     )
 
     print("=" * 64)
-    print("DataLens multi-user API server")
+    print("DataLens forensic API server (authentication disabled)")
     print(f"Listening on {HOST}:{PORT}")
     print(f"Persistent data directory: {DATA_DIR}")
-    print("Authentication: enabled")
+    print("Authentication: DISABLED — public API access")
     print("Stop with Ctrl+C.")
     print("=" * 64)
 
