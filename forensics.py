@@ -259,6 +259,10 @@ MAX_TEXT_SCAN_BYTES = 2 * 1024 * 1024
 MAX_EXTRACTED_TEXT_CHARS = 2 * 1024 * 1024
 
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".doc"}
+SPREADSHEET_EXTENSIONS = {".xlsx", ".xlsm"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_SPREADSHEET_CELLS = 100_000
 
 
 
@@ -1733,6 +1737,86 @@ def _score_event_content(text_content, suffix):
     return min(score, 100), findings, factors, records
 
 
+def extract_spreadsheet_text(file_path):
+    """Extract bounded XLSX/XLSM cell content without executing macros."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError("Excel extraction requires openpyxl; add it to requirements.txt.") from exc
+    workbook = load_workbook(filename=str(file_path), read_only=True, data_only=True, keep_links=False)
+    chunks, cells_seen = [], 0
+    try:
+        for sheet in workbook.worksheets:
+            chunks.append(f"WORKSHEET: {sheet.title}")
+            for row in sheet.iter_rows(values_only=True):
+                values = [str(value) for value in row if value is not None]
+                if values:
+                    chunks.append(" | ".join(values))
+                cells_seen += len(row)
+                if cells_seen >= MAX_SPREADSHEET_CELLS:
+                    chunks.append("[CELL LIMIT REACHED]")
+                    return "\n".join(chunks)[:MAX_EXTRACTED_TEXT_CHARS]
+    finally:
+        workbook.close()
+    return "\n".join(chunks)[:MAX_EXTRACTED_TEXT_CHARS]
+
+
+def inspect_image_forensics(file_path):
+    """Inspect image metadata/pixels and optionally OCR visible text.
+
+    Signals are triage indicators only; they do not prove manipulation or authenticity.
+    """
+    try:
+        from PIL import Image, ImageStat
+    except ImportError as exc:
+        raise RuntimeError("Image inspection requires Pillow; add it to requirements.txt.") from exc
+    findings, factors, extracted_text = [], [], ""
+    with Image.open(file_path) as image:
+        image.verify()
+    with Image.open(file_path) as image:
+        image_format = str(image.format or "UNKNOWN").upper()
+        width, height = image.size
+        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+            raise ValueError("Image dimensions are invalid or exceed the safe inspection limit.")
+        findings.append(f"Image decoded successfully: {image_format}, {width} × {height} pixels.")
+        exif = image.getexif()
+        try:
+            from PIL.ExifTags import TAGS
+            exif_names = {TAGS.get(key, str(key)): value for key, value in exif.items()}
+        except Exception:
+            exif_names = {}
+        if exif_names:
+            findings.append(f"Image contains {len(exif_names)} EXIF metadata field(s).")
+            for key in ("DateTime", "DateTimeOriginal", "DateTimeDigitized", "Make", "Model", "Software"):
+                if key in exif_names:
+                    findings.append(f"EXIF {key}: {str(exif_names[key])[:120]}")
+            dates = {str(exif_names[k]) for k in ("DateTime", "DateTimeOriginal", "DateTimeDigitized") if k in exif_names}
+            if len(dates) > 1:
+                findings.append("EXIF timestamp fields differ; verify the image timeline against independent evidence.")
+                factors.append({"category": "Inconsistent image timestamp metadata", "points": 12, "evidence": "EXIF timestamp fields do not agree"})
+        else:
+            findings.append("No EXIF metadata found; this is common and is not itself evidence of tampering.")
+        if image.info:
+            findings.append("Embedded image metadata fields: " + ", ".join(sorted(str(k) for k in image.info)[:20]))
+        sample = image.convert("RGB")
+        sample.thumbnail((512, 512))
+        variance = sum(ImageStat.Stat(sample).var) / 3
+        if variance < 2:
+            findings.append("Image has very low pixel variation; it may be blank, nearly uniform, or intentionally obscured.")
+            factors.append({"category": "Unusually uniform image content", "points": 8, "evidence": f"Mean RGB variance {variance:.2f}"})
+    try:
+        import pytesseract
+        with Image.open(file_path) as image:
+            extracted_text = pytesseract.image_to_string(image, timeout=15)[:MAX_EXTRACTED_TEXT_CHARS]
+        if extracted_text.strip():
+            findings.append("OCR extracted visible text; extracted text was also checked for configured indicators.")
+    except ImportError:
+        findings.append("OCR unavailable: install pytesseract and the Tesseract OCR engine to inspect visible text.")
+    except Exception as exc:
+        findings.append(f"OCR unavailable for this image: {type(exc).__name__}.")
+    return extracted_text, findings, factors
+
+
 def inspect_evidence(evidence):
     """Content-aware rule triage for one acquired evidence item."""
     path = Path(evidence["stored_path"])
@@ -1794,21 +1878,22 @@ def inspect_evidence(evidence):
         factors.append({"category": "Executable or script file", "points": 8, "evidence": suffix})
         score += 8
 
-    if size <= MAX_TEXT_SCAN_BYTES and (suffix in TEXT_EXTENSIONS or suffix in DOCUMENT_EXTENSIONS):
+    scan_supported = suffix in TEXT_EXTENSIONS or suffix in DOCUMENT_EXTENSIONS or suffix in SPREADSHEET_EXTENSIONS
+    if size <= MAX_TEXT_SCAN_BYTES and scan_supported:
         try:
             if suffix in TEXT_EXTENSIONS:
                 raw = path.read_bytes()
                 text_content = "" if b"\x00" in raw else raw.decode("utf-8-sig", errors="replace")
-            else:
+            elif suffix in DOCUMENT_EXTENSIONS:
                 text_content = extract_document_text(path)
+            else:
+                text_content = extract_spreadsheet_text(path)
             behavioral_score, behavioral_findings, behavioral_factors, records = _score_event_content(text_content, suffix)
             score += behavioral_score
             findings.extend(behavioral_findings)
             factors.extend(behavioral_factors)
-
             for label, pattern in SENSITIVE_PATTERNS.items():
                 if re.search(pattern, text_content):
-                    # Email addresses are informational; exposed secrets are riskier.
                     if "email" in label.lower():
                         findings.append(label + " detected (informational; not independently suspicious).")
                     else:
@@ -1819,17 +1904,45 @@ def inspect_evidence(evidence):
             entropy = file_entropy(path)
         except Exception as exc:
             findings.append(f"Content inspection unavailable: {exc}")
-    elif suffix in DOCUMENT_EXTENSIONS:
-        findings.append(f"Document content was not scanned because it exceeds the {MAX_TEXT_SCAN_BYTES // (1024 * 1024)} MiB inspection limit.")
+    elif scan_supported:
+        findings.append(f"Content inspection skipped because the file exceeds the {MAX_TEXT_SCAN_BYTES // (1024 * 1024)} MiB inspection limit.")
 
-    if entropy is not None and entropy > 7.5:
+    if suffix in IMAGE_EXTENSIONS:
+        try:
+            image_text, image_findings, image_factors = inspect_image_forensics(path)
+            findings.extend(image_findings)
+            factors.extend(image_factors)
+            score += sum(int(item.get("points", 0)) for item in image_factors)
+            if image_text:
+                image_score, image_behavior, image_risk_factors, _ = _score_event_content(image_text, ".txt")
+                score += image_score
+                findings.extend(image_behavior)
+                factors.extend(image_risk_factors)
+                for label, pattern in SENSITIVE_PATTERNS.items():
+                    if "email" not in label.lower() and re.search(pattern, image_text):
+                        points = 35 if "private key" in label.lower() else 25
+                        findings.append(label + " detected in OCR text; inspect securely.")
+                        factors.append({"category": label, "points": points, "evidence": "OCR text marker matched"})
+                        score += points
+            entropy = file_entropy(path)
+        except Exception as exc:
+            findings.append(f"Image inspection unavailable: {exc}")
+
+    if entropy is not None and entropy > 7.5 and suffix not in IMAGE_EXTENSIONS:
         findings.append("High entropy observed; compression, encryption, or encoding may explain it.")
         factors.append({"category": "High file entropy", "points": 8, "evidence": f"Entropy {entropy:.3f}"})
         score += 8
 
+    supported_types = TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS | SPREADSHEET_EXTENSIONS | IMAGE_EXTENSIONS | RISK_EXTENSIONS
+    analysis_status = "COMPLETED" if suffix in supported_types else "UNSUPPORTED_FORMAT"
+    if analysis_status == "UNSUPPORTED_FORMAT":
+        findings.append(f"No content analyzer is configured for this file type ({suffix or 'unknown extension'}); zero risk must not be interpreted as clean.")
+
     score = min(100, max(0, int(round(score))))
     if integrity != "VERIFIED":
         severity = "CRITICAL"
+    elif analysis_status == "UNSUPPORTED_FORMAT":
+        severity = "ANALYSIS UNAVAILABLE"
     elif score >= 80:
         severity = "CRITICAL"
     elif score >= 50:
@@ -1852,7 +1965,8 @@ def inspect_evidence(evidence):
         "findings": findings,
         "risk_factors": factors,
         "entropy": round(entropy, 3) if entropy is not None else None,
-        "analysis_method": "Content-aware forensic triage",
+        "analysis_method": "Content-aware multi-format forensic triage",
+        "analysis_status": analysis_status,
         "interpretation": "A prioritization score based on observed indicators, not a calibrated probability or proof of malicious activity.",
     }
 
