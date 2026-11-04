@@ -2657,6 +2657,28 @@
       createCase
     );
 
+    // Refresh controls already present in index.html.
+    byId('refresh-current-page')?.addEventListener(
+      'click',
+      () => refreshPage(state.currentPage).catch(error => {
+        globalMessage(error.message, 'error');
+      })
+    );
+
+    byId('refresh-cases')?.addEventListener(
+      'click',
+      () => loadCases().catch(error => {
+        showMessage('create-case-message', error.message, 'error');
+      })
+    );
+
+    byId('refresh-acquired-evidence')?.addEventListener(
+      'click',
+      () => refreshAcquiredEvidence().catch(error => {
+        showMessage('upload-message', error.message, 'error');
+      })
+    );
+
     // Case selectors
     [
       'selected-case',
