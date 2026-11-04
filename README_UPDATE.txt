@@ -1,58 +1,49 @@
 DataLens Analysis + Chain-of-Custody Update
 ==========================================
 
-Files in this package (replace existing files in the DataLens project root):
-1. forensics.py
-2. evidence_manager.py
-3. javascript.js
+Replace these files in the DataLens project root:
+- forensics.py
+- evidence_manager.py
+- javascript.js
 
-No index.html, app.py, database schema, acquisition logic, or API route is changed.
+No index.html, app.py, API route, acquisition flow, or database schema is changed.
 
 What this update changes
 ------------------------
-- Adds rule-engine risk score, number of risk factors, integrity status, and
-  supported-analysis status to the Random Forest feature vector. The existing
-  demonstration RF therefore sees content-derived indicators, not only filename,
-  extension, and entropy.
-- Raises the minimum case size for Isolation Forest to 10 files. Smaller cases
-  explicitly report "Insufficient reference set (minimum 10 files)" instead of
-  producing unstable case-relative anomaly labels.
-- Stores the complete per-evidence analysis payload in the EVIDENCE_ANALYZED
-  custody event: rule findings, risk factors, integrity, AI model outputs,
-  features, analysis status, and interpretation.
-- Adds a CASE_ANALYSIS_COMPLETED custody event with the case-level analysis
-  summary and all per-file model outputs.
-- Formats custody event details as readable JSON in the existing UI table.
-- Existing case and evidence PDF reports already include custody event details,
-  so these new analysis events are included in both report scopes.
+- Rule Severity is simplified to CRITICAL (risk score 50 or above) or NOT CRITICAL.
+  The numeric risk score remains visible as a separate value.
+- Random Forest output uses NORMAL / SUSPICIOUS labels instead of baseline / review.
+- The Confidence column is populated with the forest's maximum class probability
+  (scikit-learn) or tree-vote agreement (dependency-free fallback). This is an
+  in-sample model score based on heuristic-derived labels; it is NOT a calibrated
+  probability of maliciousness or independently validated confidence.
+- Isolation Forest now runs for cases containing at least two analyzable files,
+  rather than refusing all cases below 10 files. It reports Anomaly / Not flagged
+  and a decision score. With very small cases, treat this as a preliminary,
+  case-relative signal; an anomaly is not proof of maliciousness.
+- Evidence custody events store the rule findings, RF prediction and score,
+  Isolation Forest result and score, integrity, features, and full analysis data.
+- Case-level analysis completion is recorded in the case chain of custody; case
+  and evidence custody reports include the corresponding event details.
 
-Install / replace
------------------
-1. Back up the current three files.
-2. Extract this ZIP.
-3. Copy the three files into the project root, replacing the existing files.
-4. Run:
+Install and test
+----------------
+1. Back up the existing three files.
+2. Extract this ZIP and replace the three files in the DataLens project root.
+3. Run:
      python -m py_compile forensics.py evidence_manager.py
      node --check javascript.js
-5. Run DataLens locally and analyze a test case.
-6. Confirm the Chain of Custody page shows:
-   - EVIDENCE_ANALYZED rows for each evidence item, with complete model/rule data.
-   - CASE_ANALYSIS_COMPLETED row with the case summary.
-7. Generate both an evidence custody PDF and a case custody PDF to confirm
-   the same analysis details are present in their event histories.
+4. Restart DataLens, select a case with at least two evidence files, and run analysis.
+5. Confirm the Analysis table shows CRITICAL / NOT CRITICAL, NORMAL / SUSPICIOUS,
+   a percentage model score, and Anomaly / Not flagged.
+6. Open Chain of Custody and verify both EVIDENCE_ANALYZED and
+   CASE_ANALYSIS_COMPLETED entries. Generate both evidence and case reports.
 
-Important ML limitation
------------------------
-The existing Random Forest remains a demonstration classifier whose training
-labels are derived from heuristic rules. This patch adds the rule engine's
-content-derived indicators to its features, but does NOT turn that model into
-an independently validated malware classifier. Its prediction is experimental;
-confidence remains unavailable rather than presenting an uncalibrated value as
-reliable confidence.
-
-Isolation Forest is case-relative anomaly detection, not a malware verdict.
-It now abstains on cases with fewer than 10 evidence items to reduce unstable
-small-sample false positives.
-
+Important limitation
+-------------------
+The Random Forest is still a demonstration classifier trained on labels generated
+from forensic heuristics. Its score is model agreement / in-sample class score,
+not a trustworthy malware probability. For validated ML confidence, train and
+evaluate on an independently labeled dataset with held-out test data.
 The rule risk score is a triage priority, not a probability of maliciousness.
-Keep original evidence and verify findings independently.
+Preserve originals and independently verify findings.

@@ -1984,16 +1984,10 @@ def inspect_evidence(evidence):
         severity = "CRITICAL"
     elif analysis_status == "UNSUPPORTED_FORMAT":
         severity = "ANALYSIS UNAVAILABLE"
-    elif score >= 80:
-        severity = "CRITICAL"
     elif score >= 50:
-        severity = "HIGH"
-    elif score >= 20:
-        severity = "MEDIUM"
-    elif score > 0:
-        severity = "LOW"
+        severity = "CRITICAL"
     else:
-        severity = "NO INDICATOR"
+        severity = "NOT CRITICAL"
 
     if not findings:
         findings.append("No configured suspicious activity indicators were detected in the inspected content.")
@@ -2055,7 +2049,7 @@ def _demo_labels_from_features(feature_rows):
 
 
 
-        labels.append("review" if heuristic_score >= 25 else "baseline")
+        labels.append("SUSPICIOUS" if heuristic_score >= 25 else "NORMAL")
 
 
 
@@ -2631,11 +2625,11 @@ def _pure_python_isolation_forest(feature_rows, seed=42, n_estimators=50):
 
 
 
-    if n_samples < 10:
+    if n_samples < 2:
 
 
 
-        return ["Insufficient reference set (minimum 10 files)"] * n_samples, [None] * n_samples
+        return ["Insufficient data (minimum 2 files)"] * n_samples, [None] * n_samples
 
 
 
@@ -3000,23 +2994,31 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        # The model is trained on heuristic-derived labels from this same case
+        # Maximum class probability is shown as a model score. It is in-sample
 
 
 
-        # and then predicts those same records. In-sample probabilities would be
+        # and based on heuristic labels, not a calibrated malware probability.
 
 
 
-        # misleading, so do not report them as confidence values.
+        try:
 
 
 
-        rf_confidences = [None] * len(usable_items)
+            rf_confidences = [float(max(row)) for row in rf_model.predict_proba(rf_X)]
 
 
 
-        isolation_labels = ["Insufficient reference set (minimum 10 files)"] * len(usable_items)
+        except Exception:
+
+
+
+            rf_confidences = [0.5] * len(usable_items)
+
+
+
+        isolation_labels = ["Insufficient data (minimum 2 files)"] * len(usable_items)
 
 
 
@@ -3024,7 +3026,7 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        if len(usable_items) >= 10:
+        if len(usable_items) >= 2:
 
 
 
@@ -3144,7 +3146,7 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-            "RF confidence is N/A because in-sample probabilities or tree-vote fractions are not validated confidence estimates.",
+            "RF model score is an in-sample class probability / tree-vote agreement from heuristic-derived labels; it is not calibrated or independently validated.",
 
 
 
@@ -3180,15 +3182,11 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        # Tree vote fractions are not calibrated confidence and the labels are
+        # Display forest vote agreement as a model score, not calibrated probability.
 
 
 
-        # generated from heuristics, so show N/A in the shared output schema.
-
-
-
-        rf_confidences = [None] * len(usable_items)
+        rf_confidences = [float(value) for value in _vote_fractions]
 
 
 
@@ -3244,7 +3242,7 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-            "RF confidence is N/A because tree-vote fractions are not calibrated confidence estimates.",
+            "RF model score is tree-vote agreement from heuristic-derived labels; it is not calibrated or independently validated.",
 
 
 
@@ -3276,7 +3274,15 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        rf_prediction = str(rf_predictions[index])
+        rf_prediction = str(rf_predictions[index]).upper()
+
+        if rf_prediction in {"REVIEW", "SUSPICIOUS"}:
+
+            rf_prediction = "SUSPICIOUS"
+
+        elif rf_prediction in {"BASELINE", "NORMAL"}:
+
+            rf_prediction = "NORMAL"
 
 
 
@@ -3301,6 +3307,10 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
                     "confidence": round(rf_confidence, 4) if rf_confidence is not None else None,
+
+
+
+                    "confidence_type": "in_sample_model_score_not_calibrated",
 
 
 

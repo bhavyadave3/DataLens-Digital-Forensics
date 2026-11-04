@@ -1417,6 +1417,10 @@ def save_analysis_result(evidence_id: str, findings: dict, actor: str = "Investi
             "risk_score": findings.get("risk_score"),
 
             "ai_models": findings.get("ai_models", {}),
+            "random_forest_prediction": (findings.get("ai_models", {}).get("random_forest", {}) or {}).get("prediction"),
+            "random_forest_confidence": (findings.get("ai_models", {}).get("random_forest", {}) or {}).get("confidence"),
+            "anomaly_result": (findings.get("ai_models", {}).get("isolation_forest", {}) or {}).get("result"),
+            "anomaly_score": (findings.get("ai_models", {}).get("isolation_forest", {}) or {}).get("decision_score"),
             "analysis_status": findings.get("analysis_status"),
             "integrity": findings.get("integrity"),
             "risk_factors": findings.get("risk_factors", []),
