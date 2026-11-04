@@ -1479,9 +1479,16 @@ def get_analysis_results(case_id: str, evidence_id: str | None = None):
         item = dict(row)
 
         item["findings"] = _json_load(item.pop("findings_json"), {})
-
+        # Keep the complete nested finding payload and expose commonly used
+        # fields at the top level for older/newer API clients alike.
+        finding = item["findings"] if isinstance(item["findings"], dict) else {}
+        item["risk_score"] = finding.get("risk_score", finding.get("rule_risk_score"))
+        item["severity"] = finding.get("severity", finding.get("risk_level"))
+        item["risk_level"] = item["severity"]
+        item["risk_factors"] = finding.get("risk_factors", [])
+        item["ai_models"] = finding.get("ai_models", {})
+        item["analysis_method"] = finding.get("analysis_method", "Forensic triage")
         output.append(item)
-
     return output
 
 

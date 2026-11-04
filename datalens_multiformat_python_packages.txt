@@ -1,0 +1,6 @@
+# Add these lines to the existing requirements.txt (do not replace its current contents)
+Pillow>=10.0.0
+openpyxl>=3.1.0
+pypdf>=5.0.0
+python-docx>=1.1.0
+pytesseract>=0.3.10
