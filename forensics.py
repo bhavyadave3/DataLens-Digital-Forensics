@@ -263,6 +263,10 @@ MAX_TEXT_SCAN_BYTES = 2 * 1024 * 1024
 MAX_EXTRACTED_TEXT_CHARS = 2 * 1024 * 1024
 
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".doc"}
+SPREADSHEET_EXTENSIONS = {".xlsx", ".xlsm"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_SPREADSHEET_CELLS = 100_000
 
 
 
@@ -1370,15 +1374,30 @@ def _extract_features(evidence):
 
 
 
-    suffix = path.suffix.lower()
-
-
-
-    filename = path.name.lower()
-
-
-
+    original_filename = str(
+        evidence.get("file_name")
+        or evidence.get("original_name")
+        or evidence.get("relative_name")
+        or ""
+    )
+    suffix = path.suffix.lower() or Path(original_filename).suffix.lower()
+    filename = (original_filename or path.name).lower()
     size = stat.st_size
+
+    # Detect CSV exports if a legacy stored path and record both lack suffixes.
+    if not suffix and size:
+        try:
+            with open(path, "rb") as header_file:
+                header = header_file.read(4096).decode("utf-8-sig", errors="replace")
+            lines = header.splitlines()
+            first_line = lines[0].lower() if lines else ""
+            if "," in first_line and any(
+                column in first_line
+                for column in ("event", "timestamp", "severity", "status", "classification")
+            ):
+                suffix = ".csv"
+        except OSError:
+            pass
 
 
 
@@ -1485,38 +1504,69 @@ def extract_document_text(file_path):
 
 
     if suffix == ".pdf":
-
         try:
-
             from pypdf import PdfReader
-
         except ImportError as exc:
-
-            raise RuntimeError("PDF extraction requires pypdf. Install it with: python -m pip install pypdf") from exc
-
-
+            raise RuntimeError(
+                "PDF extraction requires pypdf. Add pypdf to requirements.txt and redeploy."
+            ) from exc
 
         reader = PdfReader(str(path), strict=False)
-
         chunks = []
-
         total = 0
+        ocr_pages = 0
+        max_pages = 20  # Bound CPU and memory use for untrusted evidence.
 
-        for page in reader.pages:
-
-            page_text = page.extract_text() or ""
-
-            remaining = MAX_EXTRACTED_TEXT_CHARS - total
-
-            if remaining <= 0:
-
+        for page_index, page in enumerate(reader.pages):
+            if page_index >= max_pages:
+                chunks.append("[PDF OCR limit reached: only the first 20 pages were inspected.]")
                 break
 
-            chunks.append(page_text[:remaining])
+            page_text = (page.extract_text() or "").strip()
+            if not page_text:
+                # Scanned PDFs contain page images, not a text layer. Render only
+                # pages without extractable text and OCR them without modifying
+                # the original evidence file.
+                try:
+                    import pypdfium2 as pdfium
+                    import pytesseract
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "This PDF appears to be scanned. OCR requires pypdfium2, "
+                        "pytesseract, Pillow, and the Tesseract system package."
+                    ) from exc
 
-            total += min(len(page_text), remaining)
+                pdf = pdfium.PdfDocument(str(path))
+                try:
+                    rendered_page = pdf[page_index]
+                    bitmap = rendered_page.render(scale=2.0)
+                    image = bitmap.to_pil()
+                    try:
+                        page_text = pytesseract.image_to_string(image, timeout=20).strip()
+                    finally:
+                        image.close()
+                        bitmap.close()
+                        rendered_page.close()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"OCR failed on PDF page {page_index + 1}: {type(exc).__name__}: {exc}"
+                    ) from exc
+                finally:
+                    pdf.close()
+                if page_text:
+                    ocr_pages += 1
 
-        return "\n".join(chunks)
+            remaining = MAX_EXTRACTED_TEXT_CHARS - total
+            if remaining <= 0:
+                break
+            page_text = page_text[:remaining]
+            chunks.append(page_text)
+            total += len(page_text)
+
+        extracted = "\n".join(chunks).strip()
+        if ocr_pages:
+            extracted += f"\n[OCR successfully extracted text from {ocr_pages} scanned PDF page(s).]"
+        return extracted
 
 
 
@@ -1722,6 +1772,86 @@ def _score_event_content(text_content, suffix):
     return min(score, 100), findings, factors, records
 
 
+def extract_spreadsheet_text(file_path):
+    """Extract bounded XLSX/XLSM cell content without executing macros."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError("Excel extraction requires openpyxl; add it to requirements.txt.") from exc
+    workbook = load_workbook(filename=str(file_path), read_only=True, data_only=True, keep_links=False)
+    chunks, cells_seen = [], 0
+    try:
+        for sheet in workbook.worksheets:
+            chunks.append(f"WORKSHEET: {sheet.title}")
+            for row in sheet.iter_rows(values_only=True):
+                values = [str(value) for value in row if value is not None]
+                if values:
+                    chunks.append(" | ".join(values))
+                cells_seen += len(row)
+                if cells_seen >= MAX_SPREADSHEET_CELLS:
+                    chunks.append("[CELL LIMIT REACHED]")
+                    return "\n".join(chunks)[:MAX_EXTRACTED_TEXT_CHARS]
+    finally:
+        workbook.close()
+    return "\n".join(chunks)[:MAX_EXTRACTED_TEXT_CHARS]
+
+
+def inspect_image_forensics(file_path):
+    """Inspect image metadata/pixels and optionally OCR visible text.
+
+    Signals are triage indicators only; they do not prove manipulation or authenticity.
+    """
+    try:
+        from PIL import Image, ImageStat
+    except ImportError as exc:
+        raise RuntimeError("Image inspection requires Pillow; add it to requirements.txt.") from exc
+    findings, factors, extracted_text = [], [], ""
+    with Image.open(file_path) as image:
+        image.verify()
+    with Image.open(file_path) as image:
+        image_format = str(image.format or "UNKNOWN").upper()
+        width, height = image.size
+        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+            raise ValueError("Image dimensions are invalid or exceed the safe inspection limit.")
+        findings.append(f"Image decoded successfully: {image_format}, {width} × {height} pixels.")
+        exif = image.getexif()
+        try:
+            from PIL.ExifTags import TAGS
+            exif_names = {TAGS.get(key, str(key)): value for key, value in exif.items()}
+        except Exception:
+            exif_names = {}
+        if exif_names:
+            findings.append(f"Image contains {len(exif_names)} EXIF metadata field(s).")
+            for key in ("DateTime", "DateTimeOriginal", "DateTimeDigitized", "Make", "Model", "Software"):
+                if key in exif_names:
+                    findings.append(f"EXIF {key}: {str(exif_names[key])[:120]}")
+            dates = {str(exif_names[k]) for k in ("DateTime", "DateTimeOriginal", "DateTimeDigitized") if k in exif_names}
+            if len(dates) > 1:
+                findings.append("EXIF timestamp fields differ; verify the image timeline against independent evidence.")
+                factors.append({"category": "Inconsistent image timestamp metadata", "points": 12, "evidence": "EXIF timestamp fields do not agree"})
+        else:
+            findings.append("No EXIF metadata found; this is common and is not itself evidence of tampering.")
+        if image.info:
+            findings.append("Embedded image metadata fields: " + ", ".join(sorted(str(k) for k in image.info)[:20]))
+        sample = image.convert("RGB")
+        sample.thumbnail((512, 512))
+        variance = sum(ImageStat.Stat(sample).var) / 3
+        if variance < 2:
+            findings.append("Image has very low pixel variation; it may be blank, nearly uniform, or intentionally obscured.")
+            factors.append({"category": "Unusually uniform image content", "points": 8, "evidence": f"Mean RGB variance {variance:.2f}"})
+    try:
+        import pytesseract
+        with Image.open(file_path) as image:
+            extracted_text = pytesseract.image_to_string(image, timeout=15)[:MAX_EXTRACTED_TEXT_CHARS]
+        if extracted_text.strip():
+            findings.append("OCR extracted visible text; extracted text was also checked for configured indicators.")
+    except ImportError:
+        findings.append("OCR unavailable: install pytesseract and the Tesseract OCR engine to inspect visible text.")
+    except Exception as exc:
+        findings.append(f"OCR unavailable for this image: {type(exc).__name__}.")
+    return extracted_text, findings, factors
+
+
 def inspect_evidence(evidence):
     """Content-aware rule triage for one acquired evidence item."""
     path = Path(evidence["stored_path"])
@@ -1737,9 +1867,34 @@ def inspect_evidence(evidence):
     integrity = integrity_result.get("status", "UNKNOWN")
     findings, factors = [], []
     score = 0
-    suffix = path.suffix.lower()
-    filename = path.name.lower()
+    # The vault normally preserves the original extension. Older evidence
+    # records or manually restored files may not, so fall back to the original
+    # evidence filename before deciding how to parse the content.
+    original_filename = str(
+        evidence.get("file_name")
+        or evidence.get("original_name")
+        or evidence.get("relative_name")
+        or ""
+    )
+    suffix = path.suffix.lower() or Path(original_filename).suffix.lower()
+    filename = (original_filename or path.name).lower()
     size = path.stat().st_size
+
+    # Some legacy records have no extension in stored_path or file_name.
+    # Detect common CSV forensic exports from their header without changing
+    # or renaming the evidence file.
+    if not suffix and size:
+        try:
+            with open(path, "rb") as header_file:
+                header = header_file.read(4096).decode("utf-8-sig", errors="replace")
+            first_line = header.splitlines()[0].lower() if header.splitlines() else ""
+            if "," in first_line and any(
+                column in first_line
+                for column in ("event", "timestamp", "severity", "status", "classification")
+            ):
+                suffix = ".csv"
+        except OSError:
+            pass
     entropy = None
     text_content = ""
 
@@ -1758,21 +1913,28 @@ def inspect_evidence(evidence):
         factors.append({"category": "Executable or script file", "points": 8, "evidence": suffix})
         score += 8
 
-    if size <= MAX_TEXT_SCAN_BYTES and (suffix in TEXT_EXTENSIONS or suffix in DOCUMENT_EXTENSIONS):
+    scan_supported = suffix in TEXT_EXTENSIONS or suffix in DOCUMENT_EXTENSIONS or suffix in SPREADSHEET_EXTENSIONS
+    if size <= MAX_TEXT_SCAN_BYTES and scan_supported:
         try:
             if suffix in TEXT_EXTENSIONS:
                 raw = path.read_bytes()
-                text_content = "" if b"\x00" in raw else raw.decode("utf-8", errors="replace")
-            else:
+                text_content = "" if b"\x00" in raw else raw.decode("utf-8-sig", errors="replace")
+            elif suffix in DOCUMENT_EXTENSIONS:
                 text_content = extract_document_text(path)
+            else:
+                text_content = extract_spreadsheet_text(path)
+            if suffix == ".pdf" and not text_content.strip():
+                findings.append(
+                    "PDF text extraction and OCR returned no text. This may be a blank, "
+                    "low-quality, encrypted, or unsupported scanned PDF; a zero score "
+                    "must not be interpreted as proof that the document is clean."
+                )
             behavioral_score, behavioral_findings, behavioral_factors, records = _score_event_content(text_content, suffix)
             score += behavioral_score
             findings.extend(behavioral_findings)
             factors.extend(behavioral_factors)
-
             for label, pattern in SENSITIVE_PATTERNS.items():
                 if re.search(pattern, text_content):
-                    # Email addresses are informational; exposed secrets are riskier.
                     if "email" in label.lower():
                         findings.append(label + " detected (informational; not independently suspicious).")
                     else:
@@ -1783,27 +1945,49 @@ def inspect_evidence(evidence):
             entropy = file_entropy(path)
         except Exception as exc:
             findings.append(f"Content inspection unavailable: {exc}")
-    elif suffix in DOCUMENT_EXTENSIONS:
-        findings.append(f"Document content was not scanned because it exceeds the {MAX_TEXT_SCAN_BYTES // (1024 * 1024)} MiB inspection limit.")
+    elif scan_supported:
+        findings.append(f"Content inspection skipped because the file exceeds the {MAX_TEXT_SCAN_BYTES // (1024 * 1024)} MiB inspection limit.")
 
-    if entropy is not None and entropy > 7.5:
+    if suffix in IMAGE_EXTENSIONS:
+        try:
+            image_text, image_findings, image_factors = inspect_image_forensics(path)
+            findings.extend(image_findings)
+            factors.extend(image_factors)
+            score += sum(int(item.get("points", 0)) for item in image_factors)
+            if image_text:
+                image_score, image_behavior, image_risk_factors, _ = _score_event_content(image_text, ".txt")
+                score += image_score
+                findings.extend(image_behavior)
+                factors.extend(image_risk_factors)
+                for label, pattern in SENSITIVE_PATTERNS.items():
+                    if "email" not in label.lower() and re.search(pattern, image_text):
+                        points = 35 if "private key" in label.lower() else 25
+                        findings.append(label + " detected in OCR text; inspect securely.")
+                        factors.append({"category": label, "points": points, "evidence": "OCR text marker matched"})
+                        score += points
+            entropy = file_entropy(path)
+        except Exception as exc:
+            findings.append(f"Image inspection unavailable: {exc}")
+
+    if entropy is not None and entropy > 7.5 and suffix not in IMAGE_EXTENSIONS:
         findings.append("High entropy observed; compression, encryption, or encoding may explain it.")
         factors.append({"category": "High file entropy", "points": 8, "evidence": f"Entropy {entropy:.3f}"})
         score += 8
 
+    supported_types = TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS | SPREADSHEET_EXTENSIONS | IMAGE_EXTENSIONS | RISK_EXTENSIONS
+    analysis_status = "COMPLETED" if suffix in supported_types else "UNSUPPORTED_FORMAT"
+    if analysis_status == "UNSUPPORTED_FORMAT":
+        findings.append(f"No content analyzer is configured for this file type ({suffix or 'unknown extension'}); zero risk must not be interpreted as clean.")
+
     score = min(100, max(0, int(round(score))))
     if integrity != "VERIFIED":
         severity = "CRITICAL"
-    elif score >= 80:
-        severity = "CRITICAL"
+    elif analysis_status == "UNSUPPORTED_FORMAT":
+        severity = "ANALYSIS UNAVAILABLE"
     elif score >= 50:
-        severity = "HIGH"
-    elif score >= 20:
-        severity = "MEDIUM"
-    elif score > 0:
-        severity = "LOW"
+        severity = "CRITICAL"
     else:
-        severity = "NO INDICATOR"
+        severity = "NOT CRITICAL"
 
     if not findings:
         findings.append("No configured suspicious activity indicators were detected in the inspected content.")
@@ -1816,7 +2000,8 @@ def inspect_evidence(evidence):
         "findings": findings,
         "risk_factors": factors,
         "entropy": round(entropy, 3) if entropy is not None else None,
-        "analysis_method": "Content-aware forensic triage",
+        "analysis_method": "Content-aware multi-format forensic triage",
+        "analysis_status": analysis_status,
         "interpretation": "A prioritization score based on observed indicators, not a calibrated probability or proof of malicious activity.",
     }
 
@@ -1838,15 +2023,33 @@ def _demo_labels_from_features(feature_rows):
 
 
         heuristic_score = (
-            25 * row.get("extension_is_executable", 0)
-            + 10 * row.get("extension_is_script", 0)
-            + 35 * row.get("has_double_extension", 0)
-            + 8 * float(row.get("entropy", 0) >= 7.5)
-            + 1.0 * row.get("rule_risk_score", 0)
-            + 5 * row.get("rule_factor_count", 0)
+
+
+
+            25 * row["extension_is_executable"]
+
+
+
+            + 10 * row["extension_is_script"]
+
+
+
+            + 35 * row["has_double_extension"]
+
+
+
+            + 8 * float(row["entropy"] >= 7.5)
+            + 1.5 * float(row.get("rule_risk_score", 0))
+            + 8 * float(row.get("rule_factor_count", 0) >= 2)
+            - 10 * float(row.get("integrity_verified", 1) == 0)
+
+
+
         )
 
-        labels.append("review" if heuristic_score >= 40 else "baseline")
+
+
+        labels.append("SUSPICIOUS" if heuristic_score >= 25 else "NORMAL")
 
 
 
@@ -2422,11 +2625,11 @@ def _pure_python_isolation_forest(feature_rows, seed=42, n_estimators=50):
 
 
 
-    # Match the sklearn path: do not make unstable anomaly decisions on a
-    # tiny case collection.
-    if n_samples < 10:
+    if n_samples < 2:
 
-        return ["Insufficient reference data (minimum 10 files)"] * n_samples, [None] * n_samples
+
+
+        return ["Insufficient data (minimum 2 files)"] * n_samples, [None] * n_samples
 
 
 
@@ -2730,18 +2933,20 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-            features = _extract_features(evidence)
-            finding = inspect_evidence(evidence)
-            # Feed content-aware rule observations into the demonstration RF.
-            # The forest remains a heuristic-trained triage model, not a
-            # classifier validated against independent ground-truth labels.
-            features["rule_risk_score"] = float(finding.get("risk_score", 0) or 0)
-            features["rule_factor_count"] = float(len(finding.get("risk_factors", []) or []))
-            features["integrity_verified"] = float(finding.get("integrity") == "VERIFIED")
-            features["analysis_supported"] = float(finding.get("analysis_status") == "COMPLETED")
-            feature_rows.append(features)
+            feature_rows.append(_extract_features(evidence))
+
+
+
             usable_items.append(evidence)
+
+
+
+            finding = inspect_evidence(evidence)
             rule_findings.append(finding)
+            feature_rows[-1]["rule_risk_score"] = float(finding.get("risk_score", 0))
+            feature_rows[-1]["rule_factor_count"] = float(len(finding.get("risk_factors", [])))
+            feature_rows[-1]["integrity_verified"] = float(finding.get("integrity") == "VERIFIED")
+            feature_rows[-1]["analysis_supported"] = float(finding.get("analysis_status") == "COMPLETED")
 
 
 
@@ -2789,36 +2994,39 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        # The model is trained on heuristic-derived labels from this same case
+        # Maximum class probability is shown as a model score. It is in-sample
 
 
 
-        # and then predicts those same records. In-sample probabilities would be
+        # and based on heuristic labels, not a calibrated malware probability.
 
 
 
-        # misleading, so do not report them as confidence values.
+        try:
 
 
 
-        rf_confidences = [None] * len(usable_items)
+            rf_confidences = [float(max(row)) for row in rf_model.predict_proba(rf_X)]
 
 
 
-        # A case-relative anomaly model is unreliable on tiny collections.
-        # Abstain until at least 10 evidence files are available.
-        isolation_labels = ["Insufficient reference data (minimum 10 files)"] * len(usable_items)
+        except Exception:
+
+
+
+            rf_confidences = [0.5] * len(usable_items)
+
+
+
+        isolation_labels = ["Insufficient data (minimum 2 files)"] * len(usable_items)
+
+
 
         isolation_scores = [None] * len(usable_items)
 
-        has_reference_variation = any(
-            len({row.get(name) for row in feature_rows}) > 1
-            for name in feature_rows[0]
-        )
-        if len(usable_items) >= 10 and not has_reference_variation:
-            isolation_labels = ["Insufficient feature variation"] * len(usable_items)
 
-        if len(usable_items) >= 10 and has_reference_variation:
+
+        if len(usable_items) >= 2:
 
 
 
@@ -2938,7 +3146,7 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-            "RF confidence is N/A because in-sample probabilities or tree-vote fractions are not validated confidence estimates.",
+            "RF model score is an in-sample class probability / tree-vote agreement from heuristic-derived labels; it is not calibrated or independently validated.",
 
 
 
@@ -2974,15 +3182,11 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        # Tree vote fractions are not calibrated confidence and the labels are
+        # Display forest vote agreement as a model score, not calibrated probability.
 
 
 
-        # generated from heuristics, so show N/A in the shared output schema.
-
-
-
-        rf_confidences = [None] * len(usable_items)
+        rf_confidences = [float(value) for value in _vote_fractions]
 
 
 
@@ -3038,7 +3242,7 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-            "RF confidence is N/A because tree-vote fractions are not calibrated confidence estimates.",
+            "RF model score is tree-vote agreement from heuristic-derived labels; it is not calibrated or independently validated.",
 
 
 
@@ -3070,23 +3274,26 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-        raw_rf_prediction = str(rf_predictions[index]).strip().lower()
-        if raw_rf_prediction in {"review", "suspicious", "anomaly", "malicious"}:
+        rf_prediction = str(rf_predictions[index]).upper()
+
+        if rf_prediction in {"REVIEW", "SUSPICIOUS"}:
+
             rf_prediction = "SUSPICIOUS"
-        elif raw_rf_prediction in {"baseline", "normal", "clean"}:
+
+        elif rf_prediction in {"BASELINE", "NORMAL"}:
+
             rf_prediction = "NORMAL"
-        else:
-            rf_prediction = "REVIEW"
+
+
 
         combined = {
 
+
+
             **finding,
 
-            "analysis_method": "Rule-based triage + Random Forest + Isolation Forest",
-            "random_forest_prediction": rf_prediction,
-            "confidence": None,
-            "anomaly_result": isolation_labels[index],
-            "anomaly_score": isolation_scores[index],
+
+
             "ai_models": {
 
 
@@ -3101,7 +3308,11 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
                     "confidence": round(rf_confidence, 4) if rf_confidence is not None else None,
 
-                    "confidence_type": "not_calibrated_demonstration_output",
+
+
+                    "confidence_type": "in_sample_model_score_not_calibrated",
+
+
 
                     "model_note": rf_note,
 
@@ -3215,16 +3426,14 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
 
 
-    # Record one case-level analysis event as well as the per-evidence events
-    # created by save_analysis_result(). The case custody screen and case PDF
-    # can therefore show the overall run and each file's model/risk output.
+    # Case-level custody entry complements the per-evidence analysis events.
     case_summary = {
-        "analysis_method": "Rule-based triage + Random Forest + Isolation Forest",
         "total_evidence": len(evidence_items),
         "analyzed": len(results),
         "skipped": skipped,
         "results": results,
         "model_notes": model_notes,
+        "analysis_method": "Rule-based triage + experimental ML models",
     }
     add_custody_event(
         case_id=case_id,
@@ -3236,7 +3445,11 @@ def analyze_case_ai(case_id, actor="Investigator"):
 
     return {
 
+
+
         "case_id": case_id,
+
+
 
         "total_evidence": len(evidence_items),
 

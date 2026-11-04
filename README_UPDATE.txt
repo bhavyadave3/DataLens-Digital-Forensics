@@ -1,61 +1,49 @@
-DATALENS ANALYSIS + CHAIN-OF-CUSTODY UPDATE
+DataLens Analysis + Chain-of-Custody Update
+==========================================
 
-Files included
---------------
-1. forensics.py
-2. evidence_manager.py
-3. javascript.js
+Replace these files in the DataLens project root:
+- forensics.py
+- evidence_manager.py
+- javascript.js
 
-Installation
-------------
-1. Stop the DataLens server.
-2. Make a backup copy of these three existing files.
-3. Replace:
-   - project-root/forensics.py
-   - project-root/evidence_manager.py
-   - project-root/javascript.js
-4. Do not delete or replace datalens_data, datalens.db, evidence_vault, or reports.
-5. Restart DataLens and open an existing case.
-6. Run AI Analysis, then open Chain of Custody.
+No index.html, app.py, API route, acquisition flow, or database schema is changed.
 
 What this update changes
 ------------------------
-- Keeps rule-based risk score and adds Random Forest output to each saved
-  evidence analysis.
-- Maps the model's demonstration labels to readable NORMAL / SUSPICIOUS values.
-- Adds rule-derived risk score and factor count to the Random Forest feature
-  inputs, so content findings can influence the model's demonstration output.
-- Isolation Forest abstains when fewer than 10 evidence files are available,
-  or when the case has no meaningful feature variation. This avoids presenting
-  unstable tiny-sample results as a reliable anomaly verdict.
-- Saves the full per-file analysis details in each EVIDENCE_ANALYZED custody
-  event, including risk, RF, IF, integrity, findings and model notes.
-- Adds one CASE_ANALYSIS_COMPLETED event with the case-level results summary.
-- Existing database schema is retained; no database reset or migration is
-  required by this update.
-- The existing JavaScript UI structure and API routes are preserved. The
-  analysis table and custody table display the results already returned by
-  the existing API.
+- Rule Severity is simplified to CRITICAL (risk score 50 or above) or NOT CRITICAL.
+  The numeric risk score remains visible as a separate value.
+- Random Forest output uses NORMAL / SUSPICIOUS labels instead of baseline / review.
+- The Confidence column is populated with the forest's maximum class probability
+  (scikit-learn) or tree-vote agreement (dependency-free fallback). This is an
+  in-sample model score based on heuristic-derived labels; it is NOT a calibrated
+  probability of maliciousness or independently validated confidence.
+- Isolation Forest now runs for cases containing at least two analyzable files,
+  rather than refusing all cases below 10 files. It reports Anomaly / Not flagged
+  and a decision score. With very small cases, treat this as a preliminary,
+  case-relative signal; an anomaly is not proof of maliciousness.
+- Evidence custody events store the rule findings, RF prediction and score,
+  Isolation Forest result and score, integrity, features, and full analysis data.
+- Case-level analysis completion is recorded in the case chain of custody; case
+  and evidence custody reports include the corresponding event details.
 
-Important interpretation
-------------------------
-The Random Forest in this project is still a demonstration model trained on
-heuristic-derived labels from the evidence being analyzed. Its NORMAL /
-SUSPICIOUS output is a triage indicator, not independently validated malware
-classification. It does not have a calibrated confidence score.
-Isolation Forest detects statistical outliers relative to the current case;
-an anomaly is not proof of maliciousness. With fewer than 10 files it will
-show "Insufficient reference data" rather than a misleading result.
+Install and test
+----------------
+1. Back up the existing three files.
+2. Extract this ZIP and replace the three files in the DataLens project root.
+3. Run:
+     python -m py_compile forensics.py evidence_manager.py
+     node --check javascript.js
+4. Restart DataLens, select a case with at least two evidence files, and run analysis.
+5. Confirm the Analysis table shows CRITICAL / NOT CRITICAL, NORMAL / SUSPICIOUS,
+   a percentage model score, and Anomaly / Not flagged.
+6. Open Chain of Custody and verify both EVIDENCE_ANALYZED and
+   CASE_ANALYSIS_COMPLETED entries. Generate both evidence and case reports.
 
-Quick verification
-------------------
-1. Acquire a case with several files of different formats.
-2. Run AI Analysis.
-3. Confirm the analysis table shows risk severity, risk score, Random Forest,
-   Isolation Forest, and analysis time.
-4. Open Chain of Custody. Confirm EVIDENCE_ANALYZED events show the per-file
-   analysis details and CASE_ANALYSIS_COMPLETED shows the case summary.
-5. Run custody integrity verification. The chain should remain valid.
-
-No software change can guarantee that every file will be classified correctly.
-Use the findings as forensic triage and verify suspicious indicators manually.
+Important limitation
+-------------------
+The Random Forest is still a demonstration classifier trained on labels generated
+from forensic heuristics. Its score is model agreement / in-sample class score,
+not a trustworthy malware probability. For validated ML confidence, train and
+evaluate on an independently labeled dataset with held-out test data.
+The rule risk score is a triage priority, not a probability of maliciousness.
+Preserve originals and independently verify findings.
