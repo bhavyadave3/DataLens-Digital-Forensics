@@ -1146,7 +1146,9 @@
       record.findings ??
       record.findings_json ??
       record.findingsJson ??
-      record.analysis_findings
+      record.analysis_findings ??
+      record.analysis_result ??
+      record.result
     );
 
     // Support older records that wrap the findings one level deeper.
@@ -1203,6 +1205,8 @@
       effectiveFindings.severity,
       effectiveFindings.risk_level,
       effectiveFindings.rule_severity,
+      record.severity,
+      record.risk_level,
       record['Rule severity'],
       record.rule_severity,
       record.severity,
@@ -1212,6 +1216,8 @@
     const riskScore = firstAnalysisValue(
       effectiveFindings.risk_score,
       effectiveFindings.rule_risk_score,
+      record.risk_score,
+      record.rule_risk_score,
       record['Rule risk score'],
       record['Risk score'],
       record.risk_score
@@ -1275,6 +1281,23 @@
       confidence,
       anomaly_result: anomaly,
       anomaly_score: anomalyScore,
+      risk_factors: Array.isArray(effectiveFindings.risk_factors)
+        ? effectiveFindings.risk_factors
+        : (Array.isArray(record.risk_factors) ? record.risk_factors : []),
+      analysis_method: firstAnalysisValue(
+        effectiveFindings.analysis_method,
+        record.analysis_method
+      ),
+      analysis_status: firstAnalysisValue(
+        effectiveFindings.analysis_status,
+        record.analysis_status,
+        'UNKNOWN'
+      ),
+      detected_format: firstAnalysisValue(
+        effectiveFindings.detected_format,
+        record.detected_format,
+        'UNKNOWN'
+      ),
       analyzed_at:
         analyzedAt === 'Not available'
           ? new Date().toISOString()
@@ -1306,12 +1329,18 @@
     rows.forEach(item => {
       const row = document.createElement('tr');
 
+      const status = String(item.analysis_status || 'UNKNOWN');
       const risk = String(
         item.risk_level ??
         item.severity ??
         item.rule_severity ??
         'Not available'
       );
+      const scoreAvailable =
+        item.risk_score !== null &&
+        item.risk_score !== undefined &&
+        item.risk_score !== '' &&
+        Number.isFinite(Number(item.risk_score));
 
       const prediction = firstAnalysisValue(
         item.random_forest_prediction,
@@ -1331,9 +1360,11 @@
       );
 
       const values = [
-        item.file_name || item.evidence_id || 'Unknown file',
+        `${item.file_name || item.evidence_id || 'Unknown file'} · ${item.detected_format || 'UNKNOWN'} · ${status}`,
         risk,
-        item.risk_score ?? 'Not available',
+        scoreAvailable
+          ? `${Math.max(0, Math.min(100, Number(item.risk_score)))}/100`
+          : 'Not available',
         prediction,
         confidence,
         anomaly,
@@ -1344,6 +1375,19 @@
         const cell = makeCell(entry, {
           mono: index === 0
         });
+
+        if (index === 2) {
+          const scoreValue = Number(item.risk_score);
+          if (scoreAvailable && scoreValue >= 70) {
+            cell.classList.add('text-danger');
+          } else if (scoreAvailable && scoreValue >= 40) {
+            cell.classList.add('text-warning');
+          } else if (scoreAvailable && scoreValue >= 20) {
+            cell.classList.add('text-warning');
+          } else if (scoreAvailable) {
+            cell.classList.add('text-success');
+          }
+        }
 
         if (index === 1) {
           const normalized = risk.toLowerCase();
@@ -1393,11 +1437,20 @@
         if (detail) detail.hidden = false;
 
         if (pre) {
-          pre.textContent = JSON.stringify(
-            item.raw_findings || item,
-            null,
-            2
-          );
+          const details = item.raw_findings || item;
+          pre.textContent = JSON.stringify({
+            file_name: item.file_name,
+            detected_format: item.detected_format,
+            analysis_status: status,
+            risk_score: scoreAvailable ? Number(item.risk_score) : null,
+            severity: risk,
+            risk_factors: item.risk_factors || [],
+            findings: details.findings || [],
+            integrity: details.integrity || 'UNKNOWN',
+            analysis_method: item.analysis_method,
+            ai_models: details.ai_models || {},
+            interpretation: details.interpretation || ''
+          }, null, 2);
         }
       });
 
