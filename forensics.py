@@ -1500,38 +1500,69 @@ def extract_document_text(file_path):
 
 
     if suffix == ".pdf":
-
         try:
-
             from pypdf import PdfReader
-
         except ImportError as exc:
-
-            raise RuntimeError("PDF extraction requires pypdf. Install it with: python -m pip install pypdf") from exc
-
-
+            raise RuntimeError(
+                "PDF extraction requires pypdf. Add pypdf to requirements.txt and redeploy."
+            ) from exc
 
         reader = PdfReader(str(path), strict=False)
-
         chunks = []
-
         total = 0
+        ocr_pages = 0
+        max_pages = 20  # Bound CPU and memory use for untrusted evidence.
 
-        for page in reader.pages:
-
-            page_text = page.extract_text() or ""
-
-            remaining = MAX_EXTRACTED_TEXT_CHARS - total
-
-            if remaining <= 0:
-
+        for page_index, page in enumerate(reader.pages):
+            if page_index >= max_pages:
+                chunks.append("[PDF OCR limit reached: only the first 20 pages were inspected.]")
                 break
 
-            chunks.append(page_text[:remaining])
+            page_text = (page.extract_text() or "").strip()
+            if not page_text:
+                # Scanned PDFs contain page images, not a text layer. Render only
+                # pages without extractable text and OCR them without modifying
+                # the original evidence file.
+                try:
+                    import pypdfium2 as pdfium
+                    import pytesseract
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "This PDF appears to be scanned. OCR requires pypdfium2, "
+                        "pytesseract, Pillow, and the Tesseract system package."
+                    ) from exc
 
-            total += min(len(page_text), remaining)
+                pdf = pdfium.PdfDocument(str(path))
+                try:
+                    rendered_page = pdf[page_index]
+                    bitmap = rendered_page.render(scale=2.0)
+                    image = bitmap.to_pil()
+                    try:
+                        page_text = pytesseract.image_to_string(image, timeout=20).strip()
+                    finally:
+                        image.close()
+                        bitmap.close()
+                        rendered_page.close()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"OCR failed on PDF page {page_index + 1}: {type(exc).__name__}: {exc}"
+                    ) from exc
+                finally:
+                    pdf.close()
+                if page_text:
+                    ocr_pages += 1
 
-        return "\n".join(chunks)
+            remaining = MAX_EXTRACTED_TEXT_CHARS - total
+            if remaining <= 0:
+                break
+            page_text = page_text[:remaining]
+            chunks.append(page_text)
+            total += len(page_text)
+
+        extracted = "\n".join(chunks).strip()
+        if ocr_pages:
+            extracted += f"\n[OCR successfully extracted text from {ocr_pages} scanned PDF page(s).]"
+        return extracted
 
 
 
@@ -1888,6 +1919,12 @@ def inspect_evidence(evidence):
                 text_content = extract_document_text(path)
             else:
                 text_content = extract_spreadsheet_text(path)
+            if suffix == ".pdf" and not text_content.strip():
+                findings.append(
+                    "PDF text extraction and OCR returned no text. This may be a blank, "
+                    "low-quality, encrypted, or unsupported scanned PDF; a zero score "
+                    "must not be interpreted as proof that the document is clean."
+                )
             behavioral_score, behavioral_findings, behavioral_factors, records = _score_event_content(text_content, suffix)
             score += behavioral_score
             findings.extend(behavioral_findings)
