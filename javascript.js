@@ -1930,7 +1930,20 @@
         { key: 'evidence_id', mono: true },
         {
           key: 'details',
-          value: row => row.details ?? row.details_json ?? ''
+          value: row => {
+            const details = row.details ?? row.details_json ?? '';
+            if (details && typeof details === 'object') {
+              return JSON.stringify(details, null, 2);
+            }
+            if (typeof details === 'string') {
+              try {
+                return JSON.stringify(JSON.parse(details), null, 2);
+              } catch (_) {
+                return details;
+              }
+            }
+            return details;
+          }
         }
       ],
       'No custody events are recorded for this case.'
@@ -2655,28 +2668,6 @@
     byId('create-case-form')?.addEventListener(
       'submit',
       createCase
-    );
-
-    // Refresh controls already present in index.html.
-    byId('refresh-current-page')?.addEventListener(
-      'click',
-      () => refreshPage(state.currentPage).catch(error => {
-        globalMessage(error.message, 'error');
-      })
-    );
-
-    byId('refresh-cases')?.addEventListener(
-      'click',
-      () => loadCases().catch(error => {
-        showMessage('create-case-message', error.message, 'error');
-      })
-    );
-
-    byId('refresh-acquired-evidence')?.addEventListener(
-      'click',
-      () => refreshAcquiredEvidence().catch(error => {
-        showMessage('upload-message', error.message, 'error');
-      })
     );
 
     // Case selectors

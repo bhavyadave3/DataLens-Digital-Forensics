@@ -1417,7 +1417,14 @@ def save_analysis_result(evidence_id: str, findings: dict, actor: str = "Investi
             "risk_score": findings.get("risk_score"),
 
             "ai_models": findings.get("ai_models", {}),
-
+            "analysis_status": findings.get("analysis_status"),
+            "integrity": findings.get("integrity"),
+            "risk_factors": findings.get("risk_factors", []),
+            "findings": findings.get("findings", []),
+            "entropy": findings.get("entropy"),
+            "interpretation": findings.get("interpretation"),
+            "features": findings.get("features", {}),
+            "full_analysis": findings,
         },
 
     )
