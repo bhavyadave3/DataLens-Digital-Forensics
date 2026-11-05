@@ -1628,7 +1628,9 @@ def generate_evidence_custody_pdf(evidence_id: str, actor: str = "Investigator")
     for ev in events:
         details = ev.get("details", {})
         if not isinstance(details, str):
-            details = json.dumps(details, ensure_ascii=False, sort_keys=True, indent=2, default=str)
+            # Compact JSON avoids turning one custody event into an unnecessarily
+            # tall table cell. Paragraph wrapping still preserves the full content.
+            details = json.dumps(details, ensure_ascii=False, sort_keys=True, separators=(",", ": "), default=str)
         rows.append([
             para(ev.get("timestamp", ev.get("event_time", "")), "DLSmall"),
             para(ev.get("actor", ""), "DLCell"),
@@ -1643,7 +1645,7 @@ def generate_evidence_custody_pdf(evidence_id: str, actor: str = "Investigator")
 
     event_table = LongTable(
         rows, colWidths=[32*mm, 25*mm, 36*mm, 79*mm, 44*mm, 44*mm],
-        repeatRows=1, hAlign="LEFT"
+        repeatRows=1, splitByRow=1, splitInRow=1, hAlign="LEFT"
     )
     event_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#23395D")),
