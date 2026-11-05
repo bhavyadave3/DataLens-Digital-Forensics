@@ -1682,359 +1682,245 @@ def generate_evidence_custody_pdf(evidence_id: str, actor: str = "Investigator")
 
 
 def generate_pdf_report(case_id: str, actor: str = "Investigator") -> Path:
-
     """
+    Generate a case-level chain-of-custody PDF.
 
-    Generate a case-level chain-of-custody PDF including every evidence item
-
-    and every custody event for the selected case.
-
+    Long tables repeat their header and split between rows. Paragraph cells
+    wrap long paths, JSON values, identifiers, and hashes instead of forcing
+    the table beyond the page boundary.
     """
-
     try:
-
+        from xml.sax.saxutils import escape
         from reportlab.lib import colors
-
         from reportlab.lib.enums import TA_CENTER
-
         from reportlab.lib.pagesizes import A4, landscape
-
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-
         from reportlab.lib.units import mm
-
         from reportlab.platypus import (
-
-            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
-
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, LongTable
         )
-
     except ImportError as exc:
-
         raise RuntimeError(
-
             "PDF reports require ReportLab. Install it with: python -m pip install reportlab"
-
         ) from exc
 
-
-
     case = get_case(case_id)
-
     if not case:
-
         raise ValueError(f"Case not found: {case_id}")
 
-
-
     evidence_items = get_evidence(case_id)
-
     custody_events = get_custody(case_id)
-
     integrity = verify_custody_log(case_id)
 
-
-
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORT_DIR / f"DataLens_Case_Custody_{case_id}.pdf"
 
     styles = getSampleStyleSheet()
-
     styles.add(ParagraphStyle(
-
-        name="SmallCell", parent=styles["BodyText"], fontSize=7, leading=9
-
+        name="DLCaseCell", parent=styles["BodyText"],
+        fontName="Helvetica", fontSize=7.2, leading=9,
+        wordWrap="CJK", splitLongWords=1, spaceAfter=0,
+    ))
+    styles.add(ParagraphStyle(
+        name="DLCaseTiny", parent=styles["BodyText"],
+        fontName="Helvetica", fontSize=6.2, leading=7.5,
+        wordWrap="CJK", splitLongWords=1, spaceAfter=0,
+    ))
+    styles.add(ParagraphStyle(
+        name="DLCaseHash", parent=styles["BodyText"],
+        fontName="Courier", fontSize=5.8, leading=7,
+        wordWrap="CJK", splitLongWords=1, spaceAfter=0,
+    ))
+    styles.add(ParagraphStyle(
+        name="DLCaseHeader", parent=styles["BodyText"],
+        fontName="Helvetica-Bold", fontSize=7, leading=8,
+        textColor=colors.white, wordWrap="CJK",
+    ))
+    styles.add(ParagraphStyle(
+        name="DLCaseTitle", parent=styles["Title"],
+        alignment=TA_CENTER, fontSize=17, leading=20,
+        spaceAfter=3 * mm,
     ))
 
-    styles.add(ParagraphStyle(
-
-        name="TinyCell", parent=styles["BodyText"], fontSize=6, leading=7
-
-    ))
-
-    styles.add(ParagraphStyle(
-
-        name="CenteredSmall", parent=styles["BodyText"], alignment=TA_CENTER,
-
-        fontSize=8, leading=10
-
-    ))
-
-
-
+    page_size = landscape(A4)
     doc = SimpleDocTemplate(
-
         str(report_path),
-
-        pagesize=landscape(A4),
-
-        rightMargin=12 * mm,
-
-        leftMargin=12 * mm,
-
-        topMargin=14 * mm,
-
-        bottomMargin=14 * mm,
-
+        pagesize=page_size,
+        rightMargin=10 * mm,
+        leftMargin=10 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
         title=f"DataLens Case Chain of Custody - {case_id}",
-
         author="DataLens",
-
+        allowSplitting=1,
     )
+
+    def cell(value, style="DLCaseCell"):
+        return Paragraph(escape(str(value if value is not None else "")), styles[style])
 
     story = [
-
-        Paragraph("DataLens — Case Chain of Custody", styles["Title"]),
-
-        Paragraph("Case-level evidence inventory and chronological handling record", styles["Heading2"]),
-
-        Spacer(1, 4 * mm),
-
+        Paragraph("DataLens — Case Chain of Custody", styles["DLCaseTitle"]),
+        Paragraph(
+            "Case-level evidence inventory and chronological handling record",
+            styles["Heading2"],
+        ),
+        Spacer(1, 3 * mm),
     ]
-
-
 
     case_rows = [
-
-        ["Case ID", case["case_id"], "Case name", case["case_name"]],
-
-        ["Investigator", case["analyst"], "Created", case["created_at"]],
-
-        ["Case status", case["status"], "Evidence count", str(len(evidence_items))],
-
-        ["Custody events", str(len(custody_events)), "Hash-chain check", "VALID" if integrity["valid"] else "FAILED"],
-
+        [cell("Case ID"), cell(case.get("case_id")), cell("Case name"), cell(case.get("case_name"))],
+        [cell("Investigator"), cell(case.get("analyst")), cell("Created"), cell(case.get("created_at"))],
+        [cell("Case status"), cell(case.get("status", "Open")), cell("Evidence count"), cell(len(evidence_items))],
+        [cell("Custody events"), cell(len(custody_events)), cell("Hash-chain check"), cell("VALID" if integrity["valid"] else "FAILED")],
     ]
-
-    case_table = Table(case_rows, colWidths=[28*mm, 75*mm, 28*mm, 100*mm])
-
+    case_table = Table(
+        case_rows, colWidths=[27*mm, 75*mm, 27*mm, 121*mm],
+        hAlign="LEFT",
+    )
     case_table.setStyle(TableStyle([
-
         ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E8EEF8")),
-
         ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#E8EEF8")),
-
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#A8B4C4")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-
-    ]))
-
-    story.extend([case_table, Spacer(1, 5 * mm), Paragraph("Evidence Inventory", styles["Heading2"])])
-
-
-
-    evidence_data = [[
-
-        "Evidence ID", "File name", "Size", "SHA-256", "Acquired at", "Acquired by", "Status"
-
-    ]]
-
-    for item in evidence_items:
-
-        evidence_data.append([
-
-            Paragraph(str(item["evidence_id"]), styles["TinyCell"]),
-
-            Paragraph(str(item["file_name"]), styles["SmallCell"]),
-
-            format_bytes(item["size_bytes"]),
-
-            Paragraph(str(item["sha256"]), styles["TinyCell"]),
-
-            Paragraph(str(item["acquired_at"]), styles["TinyCell"]),
-
-            Paragraph(str(item["acquired_by"]), styles["SmallCell"]),
-
-            Paragraph(str(item["status"]), styles["SmallCell"]),
-
-        ])
-
-    if len(evidence_data) == 1:
-
-        evidence_data.append(["No evidence registered", "", "", "", "", "", ""])
-
-    evidence_table = Table(
-
-        evidence_data,
-
-        repeatRows=1,
-
-        colWidths=[30*mm, 42*mm, 20*mm, 58*mm, 35*mm, 30*mm, 35*mm],
-
-    )
-
-    evidence_table.setStyle(TableStyle([
-
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#23395D")),
-
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-
-        ("FONTSIZE", (0, 0), (-1, -1), 7),
-
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
-
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-
         ("TOPPADDING", (0, 0), (-1, -1), 4),
-
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-
     ]))
-
-    story.extend([evidence_table, Spacer(1, 5 * mm), Paragraph("Chronological Chain of Custody", styles["Heading2"])])
-
-
-
-    custody_data = [[
-
-        "Timestamp (UTC)", "Event ID", "Evidence ID", "Actor", "Action", "Details", "Previous hash", "Event hash"
-
-    ]]
-
-    for event in custody_events:
-
-        details_text = json.dumps(event.get("details", {}), ensure_ascii=False, default=str)
-
-        custody_data.append([
-
-            Paragraph(str(event["timestamp"]), styles["TinyCell"]),
-
-            Paragraph(str(event["event_id"]), styles["TinyCell"]),
-
-            Paragraph(str(event.get("evidence_id") or "CASE"), styles["TinyCell"]),
-
-            Paragraph(str(event["actor"]), styles["TinyCell"]),
-
-            Paragraph(str(event["action"]), styles["TinyCell"]),
-
-            Paragraph(details_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), styles["TinyCell"]),
-
-            Paragraph(str(event.get("previous_hash", "")), styles["TinyCell"]),
-
-            Paragraph(str(event.get("event_hash", "")), styles["TinyCell"]),
-
-        ])
-
-    if len(custody_data) == 1:
-
-        custody_data.append(["No custody events", "", "", "", "", "", "", ""])
-
-    custody_table = Table(
-
-        custody_data,
-
-        repeatRows=1,
-
-        colWidths=[28*mm, 25*mm, 24*mm, 20*mm, 29*mm, 67*mm, 40*mm, 40*mm],
-
-    )
-
-    custody_table.setStyle(TableStyle([
-
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#23395D")),
-
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-
-        ("FONTSIZE", (0, 0), (-1, -1), 6),
-
-        ("LEFTPADDING", (0, 0), (-1, -1), 3),
-
-        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-
-    ]))
-
     story.extend([
-
-        custody_table,
-
-        Spacer(1, 5 * mm),
-
-        Paragraph(
-
-            "Integrity note: the event-chain check is "
-
-            + ("VALID." if integrity["valid"] else "FAILED: " + "; ".join(integrity["errors"]))
-
-            + " This application-level hash chain is tamper-evident, but it is not independently immutable "
-
-              "and should not be represented as a digitally signed or externally anchored log.",
-
-            styles["BodyText"],
-
-        ),
-
-        Spacer(1, 3 * mm),
-
-        Paragraph(
-
-            f"Generated by {actor} at {now_utc()}. This report contains the case's currently registered "
-
-            "evidence and custody events at generation time.",
-
-            styles["Italic"],
-
-        ),
-
+        case_table, Spacer(1, 4*mm),
+        Paragraph("Evidence Inventory", styles["Heading2"]),
     ])
 
-    doc.build(story)
+    evidence_headers = [
+        "Evidence ID", "File name", "Size", "SHA-256",
+        "Acquired at (UTC)", "Acquired by", "Status",
+    ]
+    evidence_data = [[cell(value, "DLCaseHeader") for value in evidence_headers]]
+    for item in evidence_items:
+        evidence_data.append([
+            cell(item.get("evidence_id"), "DLCaseTiny"),
+            cell(item.get("file_name"), "DLCaseCell"),
+            cell(format_bytes(item.get("size_bytes")), "DLCaseTiny"),
+            cell(item.get("sha256"), "DLCaseHash"),
+            cell(item.get("acquired_at"), "DLCaseTiny"),
+            cell(item.get("acquired_by"), "DLCaseCell"),
+            cell(item.get("status"), "DLCaseCell"),
+        ])
+    if len(evidence_data) == 1:
+        evidence_data.append([cell("No evidence registered")] + [""] * 6)
 
-
-
-    # Record report generation after building the report, so the report itself
-
-    # does not falsely claim to include its own generation event.
-
-    add_custody_event(
-
-        case_id=case_id,
-
-        evidence_id=None,
-
-        actor=actor,
-
-        action="CASE_CUSTODY_REPORT_GENERATED",
-
-        details={
-
-            "report_file": report_path.name,
-
-            "evidence_count": len(evidence_items),
-
-            "custody_events_in_report": len(custody_events),
-
-            "hash_chain_valid_at_generation": integrity["valid"],
-
-        },
-
+    evidence_table = LongTable(
+        evidence_data,
+        colWidths=[30*mm, 43*mm, 19*mm, 53*mm, 43*mm, 31*mm, 33*mm],
+        repeatRows=1, splitByRow=1, splitInRow=1, hAlign="LEFT",
     )
+    evidence_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#23395D")),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#A8B4C4")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FB")]),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.extend([
+        evidence_table, Spacer(1, 4*mm),
+        Paragraph("Chronological Chain of Custody", styles["Heading2"]),
+    ])
 
+    custody_headers = [
+        "Timestamp (UTC)", "Event ID", "Evidence ID", "Actor",
+        "Action", "Recorded details", "Previous hash", "Event hash",
+    ]
+    custody_data = [[cell(value, "DLCaseHeader") for value in custody_headers]]
+    for event in custody_events:
+        details = event.get("details", {})
+        if isinstance(details, str):
+            details_text = details
+        else:
+            details_text = json.dumps(
+                details, ensure_ascii=False, sort_keys=True, indent=2, default=str
+            )
+        custody_data.append([
+            cell(event.get("timestamp", event.get("event_time", "")), "DLCaseTiny"),
+            cell(event.get("event_id", ""), "DLCaseTiny"),
+            cell(event.get("evidence_id") or "CASE", "DLCaseTiny"),
+            cell(event.get("actor", ""), "DLCaseTiny"),
+            cell(event.get("action", ""), "DLCaseTiny"),
+            cell(details_text, "DLCaseTiny"),
+            cell(event.get("previous_hash", ""), "DLCaseHash"),
+            cell(event.get("event_hash", ""), "DLCaseHash"),
+        ])
+    if len(custody_data) == 1:
+        custody_data.append([cell("No custody events")] + [""] * 7)
+
+    custody_table = LongTable(
+        custody_data,
+        colWidths=[32*mm, 25*mm, 24*mm, 20*mm, 29*mm, 64*mm, 40*mm, 40*mm],
+        repeatRows=1, splitByRow=1, splitInRow=1, hAlign="LEFT",
+    )
+    custody_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#23395D")),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#A8B4C4")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FB")]),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+
+    integrity_note = (
+        "Integrity note: the event-chain check is "
+        + ("VALID." if integrity["valid"] else "FAILED: " + "; ".join(integrity["errors"]))
+        + " This application-level hash chain is tamper-evident, but it is not "
+          "independently immutable and should not be represented as a digitally "
+          "signed or externally anchored log."
+    )
+    story.extend([
+        custody_table,
+        Spacer(1, 4*mm),
+        Paragraph(escape(integrity_note), styles["BodyText"]),
+        Spacer(1, 2*mm),
+        Paragraph(
+            escape(
+                f"Generated by {actor} at {now_utc()}. This report contains the "
+                "case's currently registered evidence and custody events at generation time."
+            ),
+            styles["Italic"],
+        ),
+    ])
+
+    def draw_page(canvas, document):
+        canvas.saveState()
+        width, height = page_size
+        canvas.setStrokeColor(colors.HexColor("#D6DEE8"))
+        canvas.line(10*mm, height - 11*mm, width - 10*mm, height - 11*mm)
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#53657D"))
+        canvas.drawString(10*mm, height - 8*mm, "DATALENS | DIGITAL FORENSICS")
+        canvas.drawRightString(width - 10*mm, 8*mm, f"Page {document.page}")
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+
+    # Log export only after the PDF is built; this event is therefore not
+    # incorrectly represented as part of the PDF that triggered it.
+    add_custody_event(
+        case_id=case_id,
+        evidence_id=None,
+        actor=actor,
+        action="CASE_CUSTODY_REPORT_GENERATED",
+        details={
+            "report_file": report_path.name,
+            "evidence_count": len(evidence_items),
+            "custody_events_in_report": len(custody_events),
+            "hash_chain_valid_at_generation": integrity["valid"],
+        },
+    )
     return report_path
-
-
-
 
 
 # Initialize storage/schema when this module is imported.
